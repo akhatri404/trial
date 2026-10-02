@@ -61,7 +61,7 @@ def _mini_workbook():
     rows = [
         ("0001 A", "0001 X", "0001 x1", 1e9, 1e6, .10, .12, 3, 1.2e9, 1.1e6, .15, .17, 5),
         ("0001 A", "0001 X", "0002 x2", 5e8, 9e5, .00, .00, 0, 5.2e8, 9e5, .00, .00, 0),
-        ("0001 A", "0002 Y", "0001 y1", 8e8, 2e6, .60, .70, 6, 8.1e8, 2e6, .58, .69, 6),
+        ("0002 B", "0002 Y", "0001 y1", 8e8, 2e6, .60, .70, 6, 8.1e8, 2e6, .58, .69, 6),
     ]
     for r in rows:
         ws.append([None] + list(r))
@@ -101,3 +101,25 @@ def test_english_pdf_has_no_japanese_report_text():
     cjk = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
     bad = [t for t in texts if cjk.search(re.sub(r"期|「方向性」|「PB SKU数」|「カテゴリー」", "", t))]
     assert not bad, bad
+
+
+def test_department_view_adds_up_to_the_company_total():
+    _, res = generate_report(_mini_workbook(), fmt="pdf")
+    dp, b = res.depts, res.bridge
+    assert set(dp["dept"]) == {"A", "B"}
+    assert abs(dp.pb_cur.sum() - b["pb_cur"]) < 1
+    assert abs(dp.market_eff.sum() - b["market"]) < 1 and abs(dp.share_eff.sum() - b["share"]) < 1
+    assert abs(dp.rate_pt.sum() - b["rate_pt"]) < 1e-6 and abs(dp.mix_pt.sum() - b["mix_pt"]) < 1e-6
+    assert all(res.dept_findings[d] for d in dp["dept"])
+
+
+@pytest.mark.skipif(not SAMPLE or not os.path.exists(SAMPLE or ""), reason="PB_SAMPLE not set")
+def test_real_workbook_department_view():
+    from pptx import Presentation
+    _, res = generate_report(SAMPLE)
+    dp, b = res.depts, res.bridge
+    assert len(dp) >= 2 and abs(dp.pb_cur.sum() - b["pb_cur"]) < 1
+    assert abs(dp.rate_pt.sum() - b["rate_pt"]) < 1e-6 and abs(dp.mix_pt.sum() - b["mix_pt"]) < 1e-6
+    data, _ = generate_report(SAMPLE, fmt="pptx")
+    titles = [sl.shapes.title.text_frame.text for sl in Presentation(io.BytesIO(data)).slides]
+    assert all(any(d in t for t in titles) for d in dp["dept"])      # one slide per department

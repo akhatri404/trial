@@ -96,6 +96,8 @@ class Result:
     borderline: pd.DataFrame = None
     scope_note: str = ""
     lang: str = "ja"
+    depts: pd.DataFrame = None                       # one row per department (部門), largest sales first
+    dept_findings: dict = field(default_factory=dict)  # {department: [plain-language takeaways]}
 
 
 # ------------------------------------------------------------------------------------------------------------
@@ -241,6 +243,8 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
     w0, w1 = d.sales_prev / S0, d.sales / S1
     d["rate_pt"] = ((w0 + w1) / 2 * (d.share_cur - d.share_prev)) * 100        # within-sub-category share change
     d["mix_pt"] = ((d.share_prev + d.share_cur) / 2 * (w1 - w0)) * 100         # shift of sales towards higher/lower PB areas
+    Rbar = (R0 + R1) / 2
+    d["mix_c_pt"] = (((d.share_prev + d.share_cur) / 2 - Rbar) * (w1 - w0)) * 100   # sums to the same total as mix_pt
     bridge = dict(
         pb_prev=PB0, pb_cur=PB1, d_pb=PB1 - PB0,
         market=float(d.market_eff.sum()), share=float(d.share_eff.sum()),
@@ -277,9 +281,27 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
     c["rank_share"] = c.share_cur.rank(ascending=False, method="min").astype(int)
     c["rank_growth"] = c.pb_growth.rank(ascending=False, method="min")
     c["rank_per_sku"] = c.per_sku_cur.rank(ascending=False, method="min")
+    c["rank_dept"] = c.groupby("dept").pb_cur.rank(ascending=False, method="min").astype(int)   # rank inside the department
     c = c.sort_values("pb_cur", ascending=False).reset_index(drop=True)
     flags = c[(c.sku_growth >= t.sku_growth_flag) & (c.per_sku_chg <= -t.sku_productivity_drop_flag)] \
         .sort_values("sku_growth", ascending=False).reset_index(drop=True)
+
+    # ---- department level (部門) ----------------------------------------------------------------------------
+    dp = d.groupby("dept", as_index=False, sort=False).agg(
+        cats=("cat", "nunique"), subs=("sub", "count"), sales=("sales", "sum"), sales_prev=("sales_prev", "sum"),
+        pb_cur=("pb_cur", "sum"), pb_prev=("pb_prev", "sum"), nb_cur=("nb_cur", "sum"),
+        sku_prev=("sku_prev", "sum"), sku_cur=("sku_cur", "sum"), market_eff=("market_eff", "sum"),
+        share_eff=("share_eff", "sum"), rate_pt=("rate_pt", "sum"), mix_pt=("mix_c_pt", "sum"))
+    dp["share_prev"], dp["share_cur"] = _div(dp.pb_prev, dp.sales_prev), _div(dp.pb_cur, dp.sales)
+    dp["yoy"] = _div(dp.sales - dp.sales_prev, dp.sales_prev)
+    dp["d_pb"] = dp.pb_cur - dp.pb_prev
+    dp["pb_growth"] = _div(dp.d_pb, dp.pb_prev)
+    dp["d_share_pt"] = (dp.share_cur - dp.share_prev) * 100
+    dp["sku_growth"] = _div(dp.sku_cur - dp.sku_prev, dp.sku_prev)
+    dp["per_sku_prev"], dp["per_sku_cur"] = _div(dp.pb_prev, dp.sku_prev), _div(dp.pb_cur, dp.sku_cur)
+    dp["per_sku_chg"] = _div(dp.per_sku_cur - dp.per_sku_prev, dp.per_sku_prev)
+    dp["verdict"] = [_verdict(a, b_, p0, p1, t) for a, b_, p0, p1 in zip(dp.sku_prev, dp.sku_cur, dp.pb_prev, dp.pb_cur)]
+    dp = dp.sort_values("sales", ascending=False).reset_index(drop=True)
 
     # ---- KPIs ----------------------------------------------------------------------------------------------
     sk0, sk1 = d.sku_prev.sum(), d.sku_cur.sum()
@@ -347,9 +369,9 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
         elif r.direction == REPLICATE:
             tgt, basis = t.upside_replicate_share, T(f"シェア{t.upside_replicate_share:.0%}", f"{t.upside_replicate_share:.0%} share")
         if tgt is not None and tgt > r.share_cur:
-            rows.append(dict(name=r["name"], direction=r.direction, sales=r.sales, share_cur=r.share_cur,
+            rows.append(dict(name=r["name"], dept=r["dept"], direction=r.direction, sales=r.sales, share_cur=r.share_cur,
                              target=tgt, add=(tgt - r.share_cur) * r.sales, basis=basis))
-    up = pd.DataFrame(rows, columns=["name", "direction", "sales", "share_cur", "target", "add", "basis"])
+    up = pd.DataFrame(rows, columns=["name", "dept", "direction", "sales", "share_cur", "target", "add", "basis"])
     up = up.sort_values("add", ascending=False).reset_index(drop=True)
     up_total = dict(add=float(up["add"].sum()), pct_of_pb=float(up["add"].sum() / PB1) if PB1 else np.nan,
                     share_after=float((PB1 + up["add"].sum()) / S1) if S1 else np.nan)
@@ -510,22 +532,6 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
                f"PB sales moved {J(PB0)} → {J(PB1)} ({J(bridge['d_pb'])}, {kpi['pb_yoy']:+.1%}) and the PB ratio "
                f"{R0:.1%} → {R1:.1%} ({(R1 - R0) * 100:+.2f} pt). {top['cat']} contributed {J(top.d_pb)}"
                + (f", about {sn:.0%} of the net change." if has_sn else ".")))
-    if bridge["d_pb"] > 0:
-        f.append(T(f"増加分のうち{J(bridge['market'])}({bridge['market'] / bridge['d_pb']:.0%})は前期PBシェアのままでの市場成長、"
-                   f"{J(bridge['share'])}({bridge['share'] / bridge['d_pb']:.0%})はシェアの純変化によるものです"
-                   f"(シェア上昇 {J(bridge['share_gain'])}、シェア低下 {J(bridge['share_loss'])})。",
-                   f"Of that growth, {J(bridge['market'])} ({bridge['market'] / bridge['d_pb']:.0%}) came from market growth at last year's PB shares and "
-                   f"{J(bridge['share'])} ({bridge['share'] / bridge['d_pb']:.0%}) from net share change "
-                   f"(gains {J(bridge['share_gain'])}, losses {J(bridge['share_loss'])})."))
-    f.append(T(f"PB比率の変化{bridge['d_ratio_pt']:+.2f}ptの内訳は、サブカテ内のシェア変化が{bridge['rate_pt']:+.2f}pt、"
-               f"サブカテ間の売上構成の変化が{bridge['mix_pt']:+.2f}ptです。",
-               f"The PB ratio change of {bridge['d_ratio_pt']:+.2f} pt splits into {bridge['rate_pt']:+.2f} pt from share change inside sub-categories "
-               f"and {bridge['mix_pt']:+.2f} pt from the sales mix shifting between sub-categories."))
-    if pd.notna(kpi["pb_units_yoy"]) and pd.notna(kpi["nb_units_yoy"]):
-        f.append(T(f"数量面: PB売れ数{kpi['pb_units_yoy']:+.1%}、非PB売れ数{kpi['nb_units_yoy']:+.1%}。全体の売れ数{kpi['units_yoy']:+.1%}に対し売上は"
-                   f"{kpi['sales_yoy']:+.1%}で、市場の売上成長は価格・構成要因によるものです。",
-                   f"Volume view: PB units {kpi['pb_units_yoy']:+.1%} vs non-PB units {kpi['nb_units_yoy']:+.1%}; total units {kpi['units_yoy']:+.1%} while sales "
-                   f"{kpi['sales_yoy']:+.1%}, so market sales growth reflects price/mix."))
     if pd.notna(kpi["per_sku_chg"]):
         s_ja = (f"PB SKU数は{sk0:.0f}→{sk1:.0f}({kpi['sku_growth']:+.0%})、PB売上は{kpi['pb_yoy']:+.0%}。PB SKU当たり売上は"
                 f"{J(kpi['per_sku_prev'])}→{J(kpi['per_sku_cur'])}({kpi['per_sku_chg']:+.0%})")
@@ -542,19 +548,44 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
                f"{conc['n_for_80']}サブカテで80%を占めます。",
                f"PB sales are concentrated: the top 3 sub-categories ({', '.join(conc['top3_names'])}) are {conc['top3']:.0%} of PB sales "
                f"and {conc['n_for_80']} sub-categories make up 80%."))
-    bigs = d.sort_values("nb_cur", ascending=False)
-    bigs = bigs[(bigs.share_cur <= t.white_space_max_share) | (bigs.d_share_pt <= -t.recapture_drop_pt)].head(3)
-    if len(bigs):
-        f.append(T("PBがほぼ未展開の大きな非PB売上: " + "、".join(
-                       f"{r['name']}(非PB {J(r.nb_cur)}、PB {r.share_cur:.1%})" for _, r in bigs.iterrows()) + "。",
-                   "Largest non-PB pools with little or no PB position: " + "; ".join(
-                       f"{r['name']} ({J(r.nb_cur)} non-PB, PB {r.share_cur:.1%})" for _, r in bigs.iterrows()) + "."))
+
+    # ---- per-department takeaways ---------------------------------------------------------------------------
+    PC = lambda x: f"{x:.1%}" if pd.notna(x) else T("－", "–")
+    dept_findings = {}
+    for _, dr in dp.iterrows():
+        sub_d = d[d["dept"] == dr["dept"]]
+        fl = []
+        mv_ = sub_d.sort_values("d_pb", ascending=False)
+        g_, l_ = mv_.iloc[0], mv_.iloc[-1]
+        pj, pe = [], []
+        if g_.d_pb > 0:
+            pj.append(f"最大の増加は{g_['name']}({J(g_.d_pb)})")
+            pe.append(f"largest gain {g_['name']} ({J(g_.d_pb)})")
+        if l_.d_pb < 0:
+            pj.append(f"最大の減少は{l_['name']}({J(l_.d_pb)})")
+            pe.append(f"largest decline {l_['name']} ({J(l_.d_pb)})")
+        if pj:
+            fl.append(T("PB売上の動き: " + "、".join(pj) + "です。", "PB sales by sub-category: " + "; ".join(pe) + "."))
+        pool_ = sub_d.sort_values("nb_cur", ascending=False).iloc[0]
+        if pool_.nb_cur > 0:
+            fl.append(T(f"非PB売上が最も大きいのは{pool_['name']}({J(pool_.nb_cur)}、PB比率{PC(pool_.share_cur)})です。",
+                        f"Largest non-PB pool: {pool_['name']} ({J(pool_.nb_cur)}, PB ratio {PC(pool_.share_cur)})."))
+        ud = float(up.loc[up["dept"] == dr["dept"], "add"].sum()) if len(up) else 0.0
+        if ud > 0:
+            fl.append(T(f"伸びしろの試算(仮定に基づく): {SCALE}・{RECAPTURE}・{REPLICATE}の合計で約{J(ud)}。",
+                        f"Illustrative upside (assumption-based): about {J(ud)} across Scale, Recapture and Replicate items."))
+        if len(watch):
+            wn = watch.loc[watch["dept"] == dr["dept"], "name"].tolist()
+            if wn:
+                fl.append(T("要注視(PBシェアが2期連続で低下): " + "、".join(wn) + "。",
+                            "Watch (PB share down two periods in a row): " + ", ".join(wn) + "."))
+        dept_findings[dr["dept"]] = fl
 
     cat_only = SEP.join(data.category_only)
     scope = T(f"対象: 全{len(d)}サブカテ" + (f"(カテゴリー単位のみの{cat_only}を含む)" if data.category_only else "") + "。",
               f"Scope: all {len(d)} sub-categories" + (f" (incl. category-level only: {cat_only})" if data.category_only else "") + ".")
     return Result((prev, cur), latest, data.partial_months, kpi, d, c, directions, flags, up, up_total, cav, t, f,
-                  bridge, rankings, watch, conc, recon, dq, bl, scope, lang)
+                  bridge, rankings, watch, conc, recon, dq, bl, scope, lang, depts=dp, dept_findings=dept_findings)
 
 
 def key_notes(res: Result) -> list:
