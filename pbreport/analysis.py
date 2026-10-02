@@ -205,8 +205,8 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
     prev, cur = full[-2], full[-1]
 
     for p in periods:
-        df[f"pb_sales_{p}"] = df[f"sales_{p}"] * df[f"pb_ratio_sales_{p}"]
-        df[f"pb_units_{p}"] = df[f"units_{p}"] * df[f"pb_ratio_units_{p}"]
+        df[f"pb_sales_{p}"] = df[f"sales_{p}"] # * df[f"pb_ratio_sales_{p}"]
+        df[f"pb_units_{p}"] = df[f"units_{p}"] # * df[f"pb_ratio_units_{p}"]
 
     d = pd.DataFrame({"dept": df["dept"], "cat": df["cat"], "sub": df["sub"], "source": df["source"]})
     d["name"] = np.where(d["sub"] == d["cat"], d["cat"], d["cat"] + " / " + d["sub"])
