@@ -2,38 +2,24 @@
 
 Run locally:  streamlit run app.py
 """
-from dataclasses import fields, asdict
-
 import streamlit as st
 
-from pbreport import FORMATS, Thresholds, WorkbookError, generate_report
-from pbreport.analysis import THRESHOLD_LABELS
+from pbreport import FORMATS, Thresholds, WorkbookError, analyze, generate_report, load_workbook_data
 
 st.set_page_config(page_title="PB戦略レポート", page_icon="📄", layout="centered")
 st.title("PB戦略レポート")
 st.caption("ペットカテゴリーのExcelファイルをアップロードしてください。選択した形式でレポートを自動作成します。")
 
-FORMAT_LABELS = {"pdf": "PDF", "pptx": "PowerPoint (.pptx)"}
-
-with st.sidebar:
-    st.header("ルールの基準値")
-    st.caption("初期値は標準レポートと同じです。チームで新しいルールに合意した場合のみ変更してください。")
-    defaults = Thresholds()
-    custom = {}
-    with st.expander("調整する", expanded=False):
-        for f in fields(Thresholds):
-            v = getattr(defaults, f.name)
-            custom[f.name] = st.number_input(THRESHOLD_LABELS.get(f.name, f.name), value=float(v), help=f.name,
-                                             format="%.4f" if abs(v) < 10 else "%.0f")
-    thresholds = Thresholds(**custom)
-    thr_key = tuple(sorted(asdict(thresholds).items()))
+FORMAT_LABELS = {"pdf": "PDF (日本語)", "pdf_en": "PDF (English)", "pptx": "PowerPoint (日本語)"}
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def build(file_bytes: bytes, name: str, thr_items: tuple, fmt: str):
-    """Cached so switching format or re-running does not repeat work for the same file and settings."""
+def build(file_bytes: bytes, name: str, fmt: str):
+    """Cached so switching format or re-running does not repeat work for the same file."""
     import io
-    blob, res = generate_report(io.BytesIO(file_bytes), Thresholds(**dict(thr_items)), source_name=name, fmt=fmt)
+    blob, res = generate_report(io.BytesIO(file_bytes), Thresholds(), source_name=name, fmt=fmt)
+    if res.lang != "ja":   # the notes shown on this page stay Japanese even when the report is English
+        res = analyze(load_workbook_data(io.BytesIO(file_bytes)), Thresholds())
     recon_ok = bool(len(res.recon) and res.recon.ok.all())
     return blob, res.kpi, res.caveats, res.dq, recon_ok, res.bridge
 
@@ -41,13 +27,13 @@ def build(file_bytes: bytes, name: str, thr_items: tuple, fmt: str):
 up = st.file_uploader("Excelファイル (.xlsx)", type=["xlsx"], accept_multiple_files=False)
 
 fmt_label = st.radio("レポート形式", list(FORMAT_LABELS.values()), horizontal=True,
-                     help="PDFは閲覧・共有向けです。PowerPointはグラフ・表・ノートをすべて編集できます。")
+                     help="PDFは閲覧・共有向けです。PDF (English)は英語版です(カテゴリー名などExcelの項目は日本語のまま)。PowerPointはグラフ・表・ノートをすべて編集できます。")
 fmt = next(k for k, v in FORMAT_LABELS.items() if v == fmt_label)
 
 if up is not None:
     try:
         with st.spinner(f"分析して{FORMAT_LABELS[fmt]}レポートを作成しています…"):
-            blob, k, caveats, dq, recon_ok, bridge = build(up.getvalue(), up.name, thr_key, fmt)
+            blob, k, caveats, dq, recon_ok, bridge = build(up.getvalue(), up.name, fmt)
     except WorkbookError as e:
         st.error(f"このファイルは処理できませんでした: {e}")
         st.stop()
@@ -65,7 +51,7 @@ if up is not None:
 
     label, mime, ext = FORMATS[fmt]
     base = up.name.rsplit(".", 1)[0]
-    st.download_button(f"⬇ {FORMAT_LABELS[fmt]}をダウンロード", data=blob, file_name=f"{base}_PBレポート{ext}", mime=mime,
+    st.download_button(f"⬇ {FORMAT_LABELS[fmt]}をダウンロード", data=blob, file_name=f"{base}_PB_report_en{ext}" if fmt == "pdf_en" else f"{base}_PBレポート{ext}", mime=mime,
                        type="primary")
     if recon_ok:
         st.caption("✅ 合計は元資料の部門合計と一致しています。")

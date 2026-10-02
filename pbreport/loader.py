@@ -8,7 +8,7 @@ Expected layout (same as 開発方向性_コミュニケーション資料):
   * sheet 「方向性」 (optional): department totals as reported by the source, plus a 「※Nヶ月分」 note. Used only to
     reconcile our totals against the source, never as an input to the analysis.
 
-Everything else (Trial / トーエー direction markers, 過去資料) is deliberately ignored.
+Everything else (トライアル direction markers, 過去資料) is deliberately ignored.
 """
 from __future__ import annotations
 

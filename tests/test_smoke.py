@@ -90,3 +90,14 @@ def test_real_workbook_reconciles_with_source_totals():
     # headline PB ratio must equal the source's own total, not a sub-category-only figure
     tot = res.recon[(res.recon.scope.str.contains("計")) & (res.recon.period == res.periods_full[1])].iloc[0]
     assert abs(res.kpi["share_cur"] - tot.rep_ratio) < 1e-6
+
+
+def test_english_pdf_has_no_japanese_report_text():
+    import re
+    pdf, res = generate_report(_mini_workbook(), fmt="pdf_en")
+    assert pdf[:4] == b"%PDF" and res.lang == "en"
+    texts = res.findings + res.caveats + [m for _, m in res.dq] + [res.scope_note]
+    # 期 and the workbook's own labels (「方向性」, 「PB SKU数」) stay Japanese by design
+    cjk = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
+    bad = [t for t in texts if cjk.search(re.sub(r"期|「方向性」|「PB SKU数」|「カテゴリー」", "", t))]
+    assert not bad, bad

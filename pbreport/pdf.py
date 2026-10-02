@@ -23,7 +23,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle)
 
 from .analysis import (DEFEND, DEPRIORITIZE, MONITOR, ORDER, RECAPTURE, REPLICATE, REVIEW, SCALE, TEST, V_SMALL, Result,
-                       _jpy, thresholds_table)
+                       money, thresholds_table, tr)
 
 NAVY = colors.HexColor("#1F3864")
 GREY = colors.HexColor("#595959")
@@ -44,6 +44,17 @@ DIR_BLURB = {
     DEFEND: "PBシェアはすでに高い水準です。シェアを守り、生産性を下げるだけのSKU追加は避けます。",
     DEPRIORITIZE: "PB未展開で、規模が小さいか縮小している市場です。優先度は低くします。",
     MONITOR: "現在のルールでは明確なシグナルはありません。",
+}
+
+DIR_BLURB_EN = {
+    SCALE: "PB share has been rising, PB sales are material and non-PB headroom remains. Put SKU effort here first.",
+    REPLICATE: "No real PB position yet, but a sibling sub-category in the same category is a proven Scale item. Reuse that playbook.",
+    RECAPTURE: "PB share collapsed versus the previous period. Find the root cause (delisting, competitor, pricing) before investing.",
+    TEST: "Large pools with no PB position and no proven sibling. Feasibility is not visible in this data, so test with 1-2 SKUs.",
+    REVIEW: "PB share is slipping. Check whether this is a product, price or placement issue.",
+    DEFEND: "PB share is already high. Protect it and avoid adding SKUs that only dilute productivity.",
+    DEPRIORITIZE: "Small or shrinking pools with no PB position. Low priority.",
+    MONITOR: "No clear signal under the current rules.",
 }
 
 _FONT = "JP"
@@ -79,10 +90,10 @@ def _register_font() -> str:
     return _FONT
 
 
-def _styles():
+def _styles(lang="ja"):
     f = _register_font()
     # wordWrap="CJK": Japanese has no spaces, so lines must be allowed to break between any characters
-    P = lambda name, **kw: ParagraphStyle(name, fontName=f, wordWrap="CJK", **kw)
+    P = lambda name, **kw: ParagraphStyle(name, fontName=f, wordWrap="CJK" if lang == "ja" else None, **kw)
     return {
         "title": P("title", fontSize=20, leading=25, textColor=NAVY, spaceAfter=2),
         "sub": P("sub", fontSize=9, leading=12, textColor=GREY),
@@ -100,12 +111,12 @@ def _p(text, st):
     return Paragraph(escape(str(text)), st)
 
 
-def _pct(x, d=1):
-    return "－" if x is None or x != x else f"{x * 100:.{d}f}%"
+def _pct0(x, d=1, na="－"):
+    return na if x is None or x != x else f"{x * 100:.{d}f}%"
 
 
-def _signed_pct(x, d=1):
-    return "－" if x is None or x != x else f"{x * 100:+.{d}f}%"
+def _signed_pct0(x, d=1, na="－"):
+    return na if x is None or x != x else f"{x * 100:+.{d}f}%"
 
 
 def _table(rows, widths, st, header=True, align_right_from=1, zebra=True):
@@ -165,28 +176,30 @@ def _bar_chart(items, width_mm=180, label_w_mm=62, row_h=13, title=None, signed=
     return dr
 
 
-def _footer(canvas, doc):
-    f = _register_font()
-    canvas.saveState()
-    canvas.setFont(f, 7)
-    canvas.setFillColor(GREY)
-    canvas.drawString(15 * mm, 8 * mm, "PB戦略レポート(自動生成)")
-    canvas.drawRightString(A4[0] - 15 * mm, 8 * mm, f"{doc.page}ページ")
-    canvas.restoreState()
-
-
 def _n(x, d=0):
     return "－" if x is None or x != x else f"{x:,.{d}f}"
 
 
 def build_pdf(res: Result, source_name: str = "") -> bytes:
-    st = _styles()
+    lang = res.lang
+    T = lambda ja, en: ja if lang == "ja" else en
+    J = money(lang)
+    D = lambda key: tr(key, lang)                     # direction / verdict display name
+    NA = T("－", "–")
+    _pct = lambda x, d=1: _pct0(x, d, NA)
+    _signed_pct = lambda x, d=1: _signed_pct0(x, d, NA)
+    BLURB = DIR_BLURB if lang == "ja" else DIR_BLURB_EN
+    SEP = T("、", ", ")
+    ARROW = "→"
+
+    st = _styles(lang)
     f = _register_font()
     prev, cur = res.periods_full
     k, b, t = res.kpi, res.bridge, res.thresholds
     buf = io.BytesIO()
+    title = T("ペットカテゴリー PB戦略レポート", "Pet category PB strategy report")
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=14 * mm,
-                            bottomMargin=16 * mm, title="ペットカテゴリー PB戦略レポート", author="PBレポート自動生成")
+                            bottomMargin=16 * mm, title=title, author=T("PBレポート自動生成", "PB report generator"))
     FW = A4[0] - 30 * mm
     S = []
     H1 = lambda txt: S.append(_p(txt, st["h1"]))
@@ -194,219 +207,274 @@ def build_pdf(res: Result, source_name: str = "") -> bytes:
     NOTE = lambda txt: S.append(_p(txt, st["small"]))
     BODY = lambda txt: S.append(_p(txt, st["body"]))
 
+    def footer(canvas, doc_):
+        canvas.saveState()
+        canvas.setFont(f, 7)
+        canvas.setFillColor(GREY)
+        canvas.drawString(15 * mm, 8 * mm, T("PB戦略レポート(自動生成)", "PB strategy report (auto-generated)"))
+        canvas.drawRightString(A4[0] - 15 * mm, 8 * mm, T(f"{doc_.page}ページ", f"Page {doc_.page}"))
+        canvas.restoreState()
+
     # ---- title ----
-    S.append(_p("ペットカテゴリー PB戦略レポート", st["title"]))
-    sub = f"比較期間: {prev}期 vs {cur}期" + (f"(PB比率とSKU数は{res.period_latest}期" +
-          (f"・{res.partial_months}ヶ月分" if res.partial_months else "・途中期") + "も表示)" if res.period_latest else "")
-    S.append(_p(sub, st["sub"]))
-    S.append(_p(f"作成日時 {dt.datetime.now():%Y-%m-%d %H:%M}" + (f"  |  元データ: {source_name}" if source_name else ""), st["sub"]))
+    S.append(_p(title, st["title"]))
+    if res.period_latest:
+        tail = T(f"(PB比率とSKU数は{res.period_latest}期" + (f"・{res.partial_months}ヶ月分" if res.partial_months else "・途中期") + "も表示)",
+                 f" (PB ratio and SKU trend also show {res.period_latest}期" + (f", {res.partial_months} months" if res.partial_months else ", partial") + ")")
+    else:
+        tail = ""
+    S.append(_p(T(f"比較期間: {prev}期 vs {cur}期", f"Periods compared: {prev}期 vs {cur}期") + tail, st["sub"]))
+    S.append(_p(T(f"作成日時 {dt.datetime.now():%Y-%m-%d %H:%M}", f"Generated {dt.datetime.now():%Y-%m-%d %H:%M}")
+                + (T(f"  |  元データ: {source_name}", f"  |  Source: {source_name}") if source_name else ""), st["sub"]))
     S.append(_p(res.scope_note, st["sub"]))
     S.append(Spacer(1, 4))
 
     # ---- 1. takeaways ----
-    H1("1. 要点")
+    H1(T("1. 要点", "1. Key takeaways"))
     for line in res.findings:
         S.append(Paragraph(escape(line), st["bullet"], bulletText="•"))
-    rows = [["指標", f"{prev}期", f"{cur}期", "増減"],
-            ["全体売上", _jpy(k["sales_prev"]), _jpy(k["sales_cur"]), _signed_pct(k["sales_yoy"])],
-            ["全体売れ数", "", "", _signed_pct(k["units_yoy"])],
-            ["平均単価(価格・構成)", "", "", _signed_pct(k["asp_chg"])],
-            ["PB売上", _jpy(k["pb_prev"]), _jpy(k["pb_cur"]), f"{_jpy(k['d_pb'])}({_signed_pct(k['pb_yoy'])})"],
-            ["非PB売上", _jpy(k["sales_prev"] - k["pb_prev"]), _jpy(k["sales_cur"] - k["pb_cur"]), _signed_pct(k["nb_yoy"])],
-            ["PB売れ数 vs 非PB売れ数", "", "", f"{_signed_pct(k['pb_units_yoy'])} vs {_signed_pct(k['nb_units_yoy'])}"],
-            ["PB比率(売上)", _pct(k["share_prev"], 2), _pct(k["share_cur"], 2), f"{(k['share_cur'] - k['share_prev']) * 100:+.2f}pt"],
-            ["PB SKU数", f"{k['sku_prev']:.0f}", f"{k['sku_cur']:.0f}", _signed_pct(k["sku_growth"], 0)],
-            ["PB SKU当たりPB売上", _jpy(k["per_sku_prev"]), _jpy(k["per_sku_cur"]), _signed_pct(k["per_sku_chg"], 0)]]
+    rows = [[T("指標", "Metric"), f"{prev}期", f"{cur}期", T("増減", "Change")],
+            [T("全体売上", "Total sales"), J(k["sales_prev"]), J(k["sales_cur"]), _signed_pct(k["sales_yoy"])],
+            [T("全体売れ数", "Total units"), "", "", _signed_pct(k["units_yoy"])],
+            [T("平均単価(価格・構成)", "Average yen per unit (price/mix)"), "", "", _signed_pct(k["asp_chg"])],
+            [T("PB売上", "PB sales"), J(k["pb_prev"]), J(k["pb_cur"]), f"{J(k['d_pb'])} ({_signed_pct(k['pb_yoy'])})"],
+            [T("非PB売上", "Non-PB sales"), J(k["sales_prev"] - k["pb_prev"]), J(k["sales_cur"] - k["pb_cur"]), _signed_pct(k["nb_yoy"])],
+            [T("PB売れ数 vs 非PB売れ数", "PB units vs non-PB units"), "", "", f"{_signed_pct(k['pb_units_yoy'])} vs {_signed_pct(k['nb_units_yoy'])}"],
+            [T("PB比率(売上)", "PB ratio (sales)"), _pct(k["share_prev"], 2), _pct(k["share_cur"], 2), f"{(k['share_cur'] - k['share_prev']) * 100:+.2f} pt"],
+            [T("PB SKU数", "PB SKUs"), f"{k['sku_prev']:.0f}", f"{k['sku_cur']:.0f}", _signed_pct(k["sku_growth"], 0)],
+            [T("PB SKU当たりPB売上", "PB sales per PB SKU"), J(k["per_sku_prev"]), J(k["per_sku_cur"]), _signed_pct(k["per_sku_chg"], 0)]]
     if res.period_latest:
-        rows.append([f"{res.period_latest}期(直近・途中期): PB比率 / PB SKU数", "", f"{_pct(k.get('share_latest'), 2)} / {k.get('sku_latest', float('nan')):.0f}",
-                     f"{cur}期比 {(k['share_latest'] - k['share_cur']) * 100:+.2f}pt"])
+        rows.append([T(f"{res.period_latest}期(直近・途中期): PB比率 / PB SKU数", f"{res.period_latest}期 (latest, partial): PB ratio / PB SKUs"),
+                     "", f"{_pct(k.get('share_latest'), 2)} / {k.get('sku_latest', float('nan')):.0f}",
+                     T(f"{cur}期比 {(k['share_latest'] - k['share_cur']) * 100:+.2f}pt", f"{(k['share_latest'] - k['share_cur']) * 100:+.2f} pt vs {cur}期")])
     S.append(Spacer(1, 4))
     S.append(_table(rows, [FW * .38, FW * .17, FW * .17, FW * .28], st))
 
     # ---- 2. growth bridge ----
-    H1("2. PB成長の要因")
-    BODY(f"PB売上は{_jpy(b['d_pb'])}変化しました。各サブカテの{prev}期PBシェアを固定した場合、市場成長だけで"
-         f"{_jpy(b['market'])}増加し、残りの{_jpy(b['share'])}はシェアの純変化によるものです。両者の合計は増減額と完全に一致します。")
-    items = [("前期PBシェアでの市場成長", b["market"], BAR_BLUE, _jpy(b["market"])),
-             ("シェア上昇(上昇したサブカテ)", b["share_gain"], GREEN, _jpy(b["share_gain"])),
-             ("シェア低下(低下したサブカテ)", b["share_loss"], RED, _jpy(b["share_loss"])),
-             ("PB売上の純増減", b["d_pb"], NAVY, _jpy(b["d_pb"]))]
-    S.append(_bar_chart(items, label_w_mm=70, title=f"PB売上の増減要因 {prev}期→{cur}期", signed=True))
+    H1(T("2. PB成長の要因", "2. What drove PB growth"))
+    BODY(T(f"PB売上は{J(b['d_pb'])}変化しました。各サブカテの{prev}期PBシェアを固定した場合、市場成長だけで"
+           f"{J(b['market'])}増加し、残りの{J(b['share'])}はシェアの純変化によるものです。両者の合計は増減額と完全に一致します。",
+           f"PB sales changed by {J(b['d_pb'])}. Holding each sub-category's {prev}期 PB share fixed, market growth alone would have added "
+           f"{J(b['market'])}; the rest, {J(b['share'])}, is net share change. The two parts add up exactly."))
+    items = [(T("前期PBシェアでの市場成長", "Market growth at prior PB shares"), b["market"], BAR_BLUE, J(b["market"])),
+             (T("シェア上昇(上昇したサブカテ)", "Share gains (sub-categories that gained)"), b["share_gain"], GREEN, J(b["share_gain"])),
+             (T("シェア低下(低下したサブカテ)", "Share losses (sub-categories that lost)"), b["share_loss"], RED, J(b["share_loss"])),
+             (T("PB売上の純増減", "Net change in PB sales"), b["d_pb"], NAVY, J(b["d_pb"]))]
+    S.append(_bar_chart(items, label_w_mm=70, title=T(f"PB売上の増減要因 {prev}期→{cur}期", f"PB sales bridge, {prev}期 → {cur}期"), signed=True))
     S.append(Spacer(1, 4))
-    BODY(f"PB比率 {b['ratio_prev']:.2%}→{b['ratio_cur']:.2%}({b['d_ratio_pt']:+.2f}pt)= サブカテ内のシェア変化 {b['rate_pt']:+.2f}pt "
-         f"+ 構成変化 {b['mix_pt']:+.2f}pt(PB比率の高い/低いサブカテ間での売上の移動)。")
+    BODY(T(f"PB比率 {b['ratio_prev']:.2%}→{b['ratio_cur']:.2%}({b['d_ratio_pt']:+.2f}pt)= サブカテ内のシェア変化 {b['rate_pt']:+.2f}pt "
+           f"+ 構成変化 {b['mix_pt']:+.2f}pt(PB比率の高い/低いサブカテ間での売上の移動)。",
+           f"PB ratio {b['ratio_prev']:.2%} → {b['ratio_cur']:.2%} ({b['d_ratio_pt']:+.2f} pt) = {b['rate_pt']:+.2f} pt from share change inside sub-categories "
+           f"and {b['mix_pt']:+.2f} pt from mix (sales shifting between higher-PB and lower-PB sub-categories)."))
     cb = res.cats.sort_values("d_pb", ascending=False)
-    rows = [["カテゴリー", "PB売上の増減", "市場要因", "シェア要因", "PB比率pt: シェア", "PB比率pt: 構成"]]
+    rows = [[T("カテゴリー", "Category"), T("PB売上の増減", "Change in PB sales"), T("市場要因", "Market effect"), T("シェア要因", "Share effect"),
+             T("PB比率pt: シェア", "PB ratio pt: share"), T("PB比率pt: 構成", "PB ratio pt: mix")]]
     for _, r in cb.iterrows():
         if abs(r.d_pb) < 1e5 and abs(r.market_eff) < 1e5:
             continue
-        rows.append([r["cat"], _jpy(r.d_pb), _jpy(r.market_eff), _jpy(r.share_eff), f"{r.rate_pt:+.2f}", f"{r.mix_pt:+.2f}"])
-    rows.append(["合計", _jpy(b["d_pb"]), _jpy(b["market"]), _jpy(b["share"]), f"{b['rate_pt']:+.2f}", f"{b['mix_pt']:+.2f}"])
+        rows.append([r["cat"], J(r.d_pb), J(r.market_eff), J(r.share_eff), f"{r.rate_pt:+.2f}", f"{r.mix_pt:+.2f}"])
+    rows.append([T("合計", "Total"), J(b["d_pb"]), J(b["market"]), J(b["share"]), f"{b['rate_pt']:+.2f}", f"{b['mix_pt']:+.2f}"])
     S.append(_table(rows, [FW * .22, FW * .18, FW * .16, FW * .16, FW * .14, FW * .14], st))
     cn = res.concentration
     S.append(Spacer(1, 3))
-    NOTE(f"集中度: 上位3サブカテ = PB売上の{cn['top3']:.0%}({prev}期は{cn['top3_prev']:.0%})、上位5 = {cn['top5']:.0%}。"
-         f"PB展開中の{cn['n_active']}サブカテのうち{cn['n_for_80']}サブカテで80%を占めます(HHI {cn['hhi']:.3f})。")
+    NOTE(T(f"集中度: 上位3サブカテ = PB売上の{cn['top3']:.0%}({prev}期は{cn['top3_prev']:.0%})、上位5 = {cn['top5']:.0%}。"
+           f"PB展開中の{cn['n_active']}サブカテのうち{cn['n_for_80']}サブカテで80%を占めます(HHI {cn['hhi']:.3f})。",
+           f"Concentration: top 3 sub-categories = {cn['top3']:.0%} of PB sales ({cn['top3_prev']:.0%} in {prev}期); top 5 = {cn['top5']:.0%}; "
+           f"{cn['n_for_80']} of {cn['n_active']} PB-active sub-categories make up 80% (HHI {cn['hhi']:.3f})."))
 
     # ---- 3. movers + pools ----
-    H1("3. PB売上の増減と伸びしろ")
+    H1(T("3. PB売上の増減と伸びしろ", "3. Where PB sales moved, and where the headroom is"))
     sub_df = res.subs
     mv = sub_df.sort_values("d_pb", ascending=False)
     gains, losses = mv[mv.d_pb > 0].head(8), mv[mv.d_pb < 0].tail(5)
-    items = [(r["name"], r.d_pb, GREEN, _jpy(r.d_pb)) for _, r in gains.iterrows()] + \
-            [(r["name"], r.d_pb, RED, _jpy(r.d_pb)) for _, r in losses.sort_values("d_pb").iterrows()]
+    items = [(r["name"], r.d_pb, GREEN, J(r.d_pb)) for _, r in gains.iterrows()] + \
+            [(r["name"], r.d_pb, RED, J(r.d_pb)) for _, r in losses.sort_values("d_pb").iterrows()]
     if items:
-        S.append(_bar_chart(items, title=f"PB売上の増減 {prev}期→{cur}期(増減の大きいサブカテ)", signed=True))
+        S.append(_bar_chart(items, title=T(f"PB売上の増減 {prev}期→{cur}期(増減の大きいサブカテ)",
+                                           f"Change in PB sales, {prev}期 → {cur}期 (largest movers)"), signed=True))
     S.append(Spacer(1, 6))
     pools = sub_df.sort_values("nb_cur", ascending=False).head(10)
-    items = [(r["name"], r.nb_cur, BAR_BLUE, f"{_jpy(r.nb_cur)}  (PB {r.share_cur * 100:.1f}%)") for _, r in pools.iterrows()]
-    S.append(_bar_chart(items, label_w_mm=62, title=f"非PB売上の大きいサブカテ {cur}期"))
+    items = [(r["name"], r.nb_cur, BAR_BLUE, f"{J(r.nb_cur)}  (PB {r.share_cur * 100:.1f}%)") for _, r in pools.iterrows()]
+    S.append(_bar_chart(items, label_w_mm=62, title=T(f"非PB売上の大きいサブカテ {cur}期", f"Largest non-PB sales pools, {cur}期")))
 
     # ---- 4. category scorecard + SKU vs sales ----
     S.append(PageBreak())
-    H1("4. カテゴリー別スコアカード: 成長・順位・SKUと売上")
-    BODY("順位はPB売上順(1 = 最大)。判定はPB SKU数の変化とPB売上の変化を比較したものです"
-         f"(SKU変化が±{t.sku_stable_band:.0%}以内は横ばい、PB売上{_jpy(t.min_base_pb_sales)}未満の小規模なものは判定対象外)。")
-    rows = [["カテゴリー", "PB売上(順位)", "PBシェア(増減pt)", "PB成長率", "市場成長率", "PB SKU数", "SKU当たりPB売上", "判定"]]
+    H1(T("4. カテゴリー別スコアカード: 成長・順位・SKUと売上", "4. Category scorecard: growth, ranking and SKU vs sales"))
+    BODY(T("順位はPB売上順(1 = 最大)。判定はPB SKU数の変化とPB売上の変化を比較したものです"
+           f"(SKU変化が±{t.sku_stable_band:.0%}以内は横ばい、PB売上{J(t.min_base_pb_sales)}未満の小規模なものは判定対象外)。",
+           "Rank is by PB sales (1 = largest). Verdict compares the change in PB SKU count with the change in PB sales "
+           f"(SKU change within ±{t.sku_stable_band:.0%} counts as a stable range; small bases under {J(t.min_base_pb_sales)} PB sales are not judged)."))
+    rows = [[T("カテゴリー", "Category"), T("PB売上(順位)", "PB sales (rank)"), T("PBシェア(増減pt)", "PB share (Δ pt)"), T("PB成長率", "PB growth"),
+             T("市場成長率", "Market growth"), T("PB SKU数", "PB SKUs"), T("SKU当たりPB売上", "PB sales / SKU"), T("判定", "Verdict")]]
     for _, r in res.cats.iterrows():
-        rows.append([r["cat"], f"{_jpy(r.pb_cur)}({r.rank_pb}位)", f"{_pct(r.share_cur)}({r.d_share_pt:+.1f})", _signed_pct(r.pb_growth, 0), _signed_pct(r.yoy),
-                     f"{r.sku_prev:.0f}→{r.sku_cur:.0f}({_signed_pct(r.sku_growth, 0)})",
-                     f"{_jpy(r.per_sku_cur)}({_signed_pct(r.per_sku_chg, 0)})", r.verdict])
+        rows.append([r["cat"], T(f"{J(r.pb_cur)}({r.rank_pb}位)", f"{J(r.pb_cur)} (#{r.rank_pb})"), f"{_pct(r.share_cur)} ({r.d_share_pt:+.1f})",
+                     _signed_pct(r.pb_growth, 0), _signed_pct(r.yoy),
+                     f"{r.sku_prev:.0f}{ARROW}{r.sku_cur:.0f} ({_signed_pct(r.sku_growth, 0)})",
+                     f"{J(r.per_sku_cur)} ({_signed_pct(r.per_sku_chg, 0)})", D(r.verdict)])
     S.append(_table(rows, [FW * .12, FW * .13, FW * .13, FW * .08, FW * .09, FW * .15, FW * .15, FW * .15], st))
     S.append(Spacer(1, 3))
-    NOTE("PB成長率 = PB売上の前期比。市場成長率 = 全体(PB+非PB)売上の前期比。"
-         "追加SKU1つ当たりのPB売上増: 全体で" + (_jpy(k["marg_per_sku"]) if k["marg_per_sku"] == k["marg_per_sku"] else "－") +
-         f"(参考: {prev}期の既存SKU1つ当たり{_jpy(k['per_sku_prev'])})。")
+    marg = J(k["marg_per_sku"]) if k["marg_per_sku"] == k["marg_per_sku"] else NA
+    NOTE(T("PB成長率 = PB売上の前期比。市場成長率 = 全体(PB+非PB)売上の前期比。"
+           f"追加SKU1つ当たりのPB売上増: 全体で{marg}(参考: {prev}期の既存SKU1つ当たり{J(k['per_sku_prev'])})。",
+           "PB growth = change in PB sales vs the previous period. Market growth = change in total (PB + non-PB) sales. "
+           f"Marginal PB sales per added SKU: {marg} overall vs {J(k['per_sku_prev'])} per existing SKU in {prev}期."))
 
-    H2("サブカテ別 PB SKU数の変化とPB売上の変化(一定規模以上)")
+    H2(T("サブカテ別 PB SKU数の変化とPB売上の変化(一定規模以上)", "PB SKU change vs PB sales change, by sub-category (larger bases)"))
     sv = sub_df[(sub_df.verdict != V_SMALL)].sort_values("pb_cur", ascending=False).head(16)
-    rows = [["サブカテ", "PB SKU数", "PB売上", "PB売上成長率", "追加SKU当たりPB売上増", "判定"]]
+    rows = [[T("サブカテ", "Sub-category"), T("PB SKU数", "PB SKUs"), T("PB売上", "PB sales"), T("PB売上成長率", "PB sales growth"),
+             T("追加SKU当たりPB売上増", "Extra PB sales per added SKU"), T("判定", "Verdict")]]
     for _, r in sv.iterrows():
-        rows.append([r["name"], f"{r.sku_prev:.0f}→{r.sku_cur:.0f}", f"{_jpy(r.pb_prev)}→{_jpy(r.pb_cur)}", _signed_pct(r.pb_growth, 0),
-                     _jpy(r.marg_per_sku), r.verdict])
+        rows.append([r["name"], f"{r.sku_prev:.0f}{ARROW}{r.sku_cur:.0f}", f"{J(r.pb_prev)}{ARROW}{J(r.pb_cur)}", _signed_pct(r.pb_growth, 0),
+                     J(r.marg_per_sku), D(r.verdict)])
     S.append(_table(rows, [FW * .27, FW * .1, FW * .2, FW * .11, FW * .14, FW * .18], st))
 
     # ---- 5. rankings ----
-    H1("5. ランキング(サブカテ)")
+    H1(T("5. ランキング(サブカテ)", "5. Rankings (sub-category)"))
     rk = res.rankings
-    def rank_table(title, df_, cols, widths, hdr_):
-        H2(title)
+
+    def rank_table(title_, df_, cols, widths, hdr_):
+        H2(title_)
         rows_ = [hdr_]
         for _, r in df_.iterrows():
             rows_.append([r["name"]] + [fn(r) for fn in cols])
         S.append(_table(rows_, widths, st))
-    rank_table("PB売上 上位10", rk["sub_pb"],
-               [lambda r: _jpy(r.pb_cur), lambda r: _pct(r.share_cur), lambda r: _signed_pct(r.pb_growth, 0),
-                lambda r: f"{r.sku_cur:.0f}", lambda r: _jpy(r.per_sku_cur)],
-               [FW * .33, FW * .14, FW * .13, FW * .13, FW * .1, FW * .17], ["サブカテ", "PB売上", "PBシェア", "PB成長率", "SKU数", "SKU当たりPB売上"])
-    rank_table(f"PB売上成長率 上位(前期PB売上{_jpy(t.min_base_pb_sales)}以上)", rk["growth_top"],
-               [lambda r: _signed_pct(r.pb_growth, 0), lambda r: _jpy(r.d_pb), lambda r: f"{_pct(r.share_prev)}→{_pct(r.share_cur)}"],
-               [FW * .36, FW * .16, FW * .16, FW * .32], ["サブカテ", "PB成長率", "増減額", "PBシェア"])
-    rank_table(f"PB売上成長率 下位(前期PB売上{_jpy(t.min_base_pb_sales)}以上)", rk["growth_bottom"],
-               [lambda r: _signed_pct(r.pb_growth, 0), lambda r: _jpy(r.d_pb), lambda r: f"{_pct(r.share_prev)}→{_pct(r.share_cur)}"],
-               [FW * .36, FW * .16, FW * .16, FW * .32], ["サブカテ", "PB成長率", "増減額", "PBシェア"])
-    rank_table("SKU当たりPB売上 上位(2SKU以上)", rk["per_sku_top"],
-               [lambda r: _jpy(r.per_sku_cur), lambda r: f"{r.sku_cur:.0f}", lambda r: _signed_pct(r.per_sku_chg, 0)],
-               [FW * .36, FW * .2, FW * .2, FW * .24], ["サブカテ", "SKU当たりPB売上", "PB SKU数", "増減"])
-    rank_table("SKU当たりPB売上 下位(2SKU以上)", rk["per_sku_bottom"],
-               [lambda r: _jpy(r.per_sku_cur), lambda r: f"{r.sku_cur:.0f}", lambda r: _signed_pct(r.per_sku_chg, 0)],
-               [FW * .36, FW * .2, FW * .2, FW * .24], ["サブカテ", "SKU当たりPB売上", "PB SKU数", "増減"])
+    sub_h = T("サブカテ", "Sub-category")
+    base_txt = J(t.min_base_pb_sales)
+    rank_table(T("PB売上 上位10", "By PB sales (top 10)"), rk["sub_pb"],
+               [lambda r: J(r.pb_cur), lambda r: _pct(r.share_cur), lambda r: _signed_pct(r.pb_growth, 0),
+                lambda r: f"{r.sku_cur:.0f}", lambda r: J(r.per_sku_cur)],
+               [FW * .33, FW * .14, FW * .13, FW * .13, FW * .1, FW * .17],
+               [sub_h, T("PB売上", "PB sales"), T("PBシェア", "PB share"), T("PB成長率", "PB growth"), T("SKU数", "SKUs"), T("SKU当たりPB売上", "PB sales / SKU")])
+    growth_cols = [lambda r: _signed_pct(r.pb_growth, 0), lambda r: J(r.d_pb), lambda r: f"{_pct(r.share_prev)}{ARROW}{_pct(r.share_cur)}"]
+    growth_hdr = [sub_h, T("PB成長率", "PB growth"), T("増減額", "Change"), T("PBシェア", "PB share")]
+    rank_table(T(f"PB売上成長率 上位(前期PB売上{base_txt}以上)", f"Fastest PB sales growth (PB sales base of at least {base_txt})"),
+               rk["growth_top"], growth_cols, [FW * .36, FW * .16, FW * .16, FW * .32], growth_hdr)
+    rank_table(T(f"PB売上成長率 下位(前期PB売上{base_txt}以上)", f"Slowest PB sales growth (PB sales base of at least {base_txt})"),
+               rk["growth_bottom"], growth_cols, [FW * .36, FW * .16, FW * .16, FW * .32], growth_hdr)
+    sku_cols = [lambda r: J(r.per_sku_cur), lambda r: f"{r.sku_cur:.0f}", lambda r: _signed_pct(r.per_sku_chg, 0)]
+    sku_hdr = [sub_h, T("SKU当たりPB売上", "PB sales / SKU"), T("PB SKU数", "PB SKUs"), T("増減", "Change")]
+    rank_table(T("SKU当たりPB売上 上位(2SKU以上)", "Highest PB sales per SKU (at least 2 SKUs)"),
+               rk["per_sku_top"], sku_cols, [FW * .36, FW * .2, FW * .2, FW * .24], sku_hdr)
+    rank_table(T("SKU当たりPB売上 下位(2SKU以上)", "Lowest PB sales per SKU (at least 2 SKUs)"),
+               rk["per_sku_bottom"], sku_cols, [FW * .36, FW * .2, FW * .2, FW * .24], sku_hdr)
     if res.period_latest and res.watchlist is not None and len(res.watchlist):
-        H2(f"要注視リスト: PBシェアが2期連続で低下({prev}→{cur}→{res.period_latest})")
-        rows = [["サブカテ", "PB売上", "PBシェアの推移"]]
+        H2(T(f"要注視リスト: PBシェアが2期連続で低下({prev}→{cur}→{res.period_latest})",
+             f"Momentum watchlist: PB share falling two steps in a row ({prev} → {cur} → {res.period_latest})"))
+        rows = [[sub_h, T("PB売上", "PB sales"), T("PBシェアの推移", "PB share path")]]
         for _, r in res.watchlist.iterrows():
-            rows.append([r["name"], _jpy(r.pb_cur), f"{_pct(r.share_prev)}→{_pct(r.share_cur)}→{_pct(r.share_latest)}"])
+            rows.append([r["name"], J(r.pb_cur), f"{_pct(r.share_prev)} {ARROW} {_pct(r.share_cur)} {ARROW} {_pct(r.share_latest)}"])
         S.append(_table(rows, [FW * .4, FW * .2, FW * .4], st))
-        NOTE(f"{res.period_latest}期は途中期のため、シェアは参考値です(季節性)。")
+        NOTE(T(f"{res.period_latest}期は途中期のため、シェアは参考値です(季節性)。",
+               f"The {res.period_latest} period is partial, so its share is indicative (seasonality)."))
 
     # ---- 6. directions ----
     S.append(PageBreak())
-    H1("6. 方向性の提案(データに基づく。Trial / トーエーの記載は不使用)")
-    BODY("各サブカテは明示的なルール(付録参照)により1つの方向性に分類しています。非PB = 直近の通期における全体売上 − PB売上。")
-    hdr = ["サブカテ", f"売上 {cur}", "非PB", f"PBシェア {prev}→{cur}" + (f"→{res.period_latest}" if res.period_latest else ""), "市場前年比"]
+    H1(T("6. 方向性の提案(データに基づく。トライアルの記載は不使用)", "6. Proposed direction (data-driven; トライアル markers not used)"))
+    BODY(T("各サブカテは明示的なルール(付録参照)により1つの方向性に分類しています。非PB = 直近の通期における全体売上 − PB売上。",
+           "Each sub-category is assigned to one direction by transparent rules (see appendix). Non-PB = total sales minus PB sales in the latest full period."))
+    latest_suffix = f"{ARROW}{res.period_latest}" if res.period_latest else ""
+    hdr = [sub_h, T(f"売上 {cur}", f"Sales {cur}"), T("非PB", "Non-PB"), T(f"PBシェア {prev}→{cur}", f"PB share {prev}→{cur}") + latest_suffix,
+           T("市場前年比", "Mkt YoY")]
     wd = [FW * .34, FW * .13, FW * .13, FW * .28, FW * .12]
     for dname in ORDER:
         x = res.directions[dname]
         if x.empty or dname == MONITOR:
             continue
-        block = [_p(f"{dname}({len(x)}件)", st["h2"]), _p(DIR_BLURB[dname], st["small"]), Spacer(1, 2)]
+        block = [_p(T(f"{D(dname)}({len(x)}件)", f"{D(dname)}  ({len(x)})"), st["h2"]), _p(BLURB[dname], st["small"]), Spacer(1, 2)]
         if dname == DEPRIORITIZE:
-            block.append(_p("、".join(x["name"].tolist()), st["body"]))
+            block.append(_p(SEP.join(x["name"].tolist()), st["body"]))
             S.append(KeepTogether(block))
             continue
         show = x.head(10)
         rows = [hdr]
         for _, r in show.iterrows():
-            lat = f"→{r.share_latest * 100:.1f}%" if r.share_latest == r.share_latest else ""
-            rows.append([r["name"], _jpy(r.sales), _jpy(r.nb_cur), f"{r.share_prev * 100:.1f}%→{r.share_cur * 100:.1f}%{lat}", _signed_pct(r.yoy)])
+            lat = f"{ARROW}{r.share_latest * 100:.1f}%" if r.share_latest == r.share_latest else ""
+            rows.append([r["name"], J(r.sales), J(r.nb_cur), f"{r.share_prev * 100:.1f}%{ARROW}{r.share_cur * 100:.1f}%{lat}", _signed_pct(r.yoy)])
         block.append(_table(rows, wd, st))
         if len(x) > len(show):
-            block.append(_p(f"ほか{len(x) - len(show)}件(付録参照)", st["small"]))
+            block.append(_p(T(f"ほか{len(x) - len(show)}件(付録参照)", f"+ {len(x) - len(show)} more (see appendix)"), st["small"]))
         S.append(KeepTogether(block))
     if res.borderline is not None and len(res.borderline):
-        H2("境界線上の分類")
-        NOTE("以下は、基準値を概ね±25%(伸びしろ)、±1pt(シェア上昇)、±60%(PB未展開シェア)、±10pt(防衛シェア)動かすと方向性が変わります。"
-             "判断が必要な項目として扱ってください: " + "/".join(f"{r['name']}({r.base}→{r.alternatives})" for _, r in res.borderline.iterrows()) + "。")
+        H2(T("境界線上の分類", "Borderline classifications"))
+        alts_ = lambda s_: T("・", ", ").join(D(a) for a in s_.split("・"))     # alternatives are stored joined by 「・」
+        pairs = T("/", "; ").join(f"{r['name']}({D(r.base)}→{alts_(r.alternatives)})" for _, r in res.borderline.iterrows())
+        NOTE(T("以下は、基準値を概ね±25%(伸びしろ)、±1pt(シェア上昇)、±60%(PB未展開シェア)、±10pt(防衛シェア)動かすと方向性が変わります。"
+               f"判断が必要な項目として扱ってください: {pairs}。",
+               "These would change direction if thresholds moved by roughly ±25% (headroom), ±1 pt (share gain), ±60% (no-PB share) or ±10 pt (defend share). "
+               f"Treat them as judgement calls: {pairs}."))
 
     # ---- 7. upside ----
-    H1("7. 伸びしろの試算(仮定に基づく)")
-    S.append(_p(f"拡大: PBシェアが現在のシェアに直近の上昇幅{t.upside_scale_momentum_years:g}年分を加えた水準に到達"
-                f"(上限{t.upside_scale_cap:.0%})。シェア奪回: 前期シェアに回復。横展開: シェア"
-                f"{t.upside_replicate_share:.0%}。小規模テストは対象外。これは計画用の仮定であり予測ではありません。"
-                "売上はNB(ナショナルブランド)から獲得し、全体売上は横ばいと仮定しています。", st["body"]))
+    H1(T("7. 伸びしろの試算(仮定に基づく)", "7. Illustrative upside (assumption-based)"))
+    S.append(_p(T(f"{D(SCALE)}: PBシェアが現在のシェアに直近の上昇幅{t.upside_scale_momentum_years:g}年分を加えた水準に到達"
+                  f"(上限{t.upside_scale_cap:.0%})。{D(RECAPTURE)}: 前期シェアに回復。{D(REPLICATE)}: シェア"
+                  f"{t.upside_replicate_share:.0%}。{D(TEST)}は対象外。これは計画用の仮定であり予測ではありません。"
+                  "売上はNB(ナショナルブランド)から獲得し、全体売上は横ばいと仮定しています。",
+                  f"{D(SCALE)} items: PB share reaches current share plus {t.upside_scale_momentum_years:g} years of the last observed gain "
+                  f"(capped at {t.upside_scale_cap:.0%}). {D(RECAPTURE)} items: previous-period share is restored. {D(REPLICATE)} items: "
+                  f"{t.upside_replicate_share:.0%} share. {D(TEST)} items are excluded. These are planning assumptions, not forecasts, "
+                  "and assume the sales come from national brands with total sales flat."), st["body"]))
     if not res.upside.empty:
-        rows = [["サブカテ", "方向性", f"売上 {cur}", "PBシェア 現在→目標", "PB売上の増加額"]]
+        rows = [[sub_h, T("方向性", "Direction"), T(f"売上 {cur}", f"Sales {cur}"), T("PBシェア 現在→目標", "PB share now → target"),
+                 T("PB売上の増加額", "Added PB sales")]]
         for _, r in res.upside.head(12).iterrows():
-            rows.append([r["name"], r.direction, _jpy(r.sales), f"{r.share_cur * 100:.1f}%→{r.target * 100:.1f}%", _jpy(r["add"])])
+            rows.append([r["name"], D(r.direction), J(r.sales), f"{r.share_cur * 100:.1f}% {ARROW} {r.target * 100:.1f}%", J(r["add"])])
         u = res.upside_total
-        rows.append(["合計(表示外の項目を含む)", "", "", f"PB比率 {_pct(k['share_cur'])}→{_pct(u['share_after'])}",
-                     f"{_jpy(u['add'])}(PB売上の{_signed_pct(u['pct_of_pb'], 0)})"])
+        rows.append([T("合計(表示外の項目を含む)", "Total (all items incl. any not shown)"), "", "",
+                     T(f"PB比率 {_pct(k['share_cur'])}→{_pct(u['share_after'])}", f"PB ratio {_pct(k['share_cur'])} → {_pct(u['share_after'])}"),
+                     T(f"{J(u['add'])}(PB売上の{_signed_pct(u['pct_of_pb'], 0)})", f"{J(u['add'])} ({_signed_pct(u['pct_of_pb'], 0)} of PB sales)")])
         S.append(_table(rows, [FW * .34, FW * .13, FW * .13, FW * .2, FW * .2], st))
 
     # ---- 8. caveats + data checks ----
-    H1("8. 会議前に確認すべき注意点")
+    H1(T("8. 会議前に確認すべき注意点", "8. Caveats to settle before the meeting"))
     for c in res.caveats:
         S.append(Paragraph(escape(c), st["bullet"], bulletText="•"))
-    H1("9. データチェックと照合")
+    H1(T("9. データチェックと照合", "9. Data checks and reconciliation"))
     for sev, msg in res.dq:
-        S.append(Paragraph(escape(("要確認: " if sev == "warn" else "") + msg), st["bullet"], bulletText="•" if sev == "info" else "!"))
+        S.append(Paragraph(escape((T("要確認: ", "Check: ") if sev == "warn" else "") + msg), st["bullet"], bulletText="•" if sev == "info" else "!"))
     if res.recon is not None and len(res.recon):
         rc = res.recon[res.recon.period == cur]
-        rows = [["区分", f"元資料の売上 {cur}", "算出した売上", "元資料のPB比率", "算出したPB比率", "一致"]]
+        rows = [[T("区分", "Scope"), T(f"元資料の売上 {cur}", f"Source sales {cur}"), T("算出した売上", "Computed sales"),
+                 T("元資料のPB比率", "Source PB ratio"), T("算出したPB比率", "Computed PB ratio"), T("一致", "Match")]]
         for _, r in rc.iterrows():
-            rows.append([r.scope, _jpy(r.rep_sales), _jpy(r.calc_sales), _pct(r.rep_ratio, 2), _pct(r.calc_ratio, 2), "○" if r.ok else "×"])
+            rows.append([r.scope, J(r.rep_sales), J(r.calc_sales), _pct(r.rep_ratio, 2), _pct(r.calc_ratio, 2),
+                         T("○" if r.ok else "×", "yes" if r.ok else "NO")])
         S.append(Spacer(1, 3))
         S.append(_table(rows, [FW * .24, FW * .19, FW * .19, FW * .13, FW * .15, FW * .1], st))
 
     # ---- appendix ----
     S.append(PageBreak())
-    S.append(_p("付録A. 使用したルールと基準値", st["h1"]))
-    S.append(_p(f"ルールは次の順に適用し、最初に該当したものを採用します: {RECAPTURE}→{REVIEW}→{SCALE}→{DEFEND}→{REPLICATE} / {TEST}→"
-                f"{DEPRIORITIZE}→{MONITOR}。基準値はアプリのサイドバーまたはコマンドラインで変更できます。", st["body"]))
-    tt = thresholds_table(res.thresholds)
+    S.append(_p(T("付録A. 使用したルールと基準値", "Appendix A. Rules and thresholds used"), st["h1"]))
+    order_txt = f"{D(RECAPTURE)} {ARROW} {D(REVIEW)} {ARROW} {D(SCALE)} {ARROW} {D(DEFEND)} {ARROW} {D(REPLICATE)} / {D(TEST)} {ARROW} {D(DEPRIORITIZE)} {ARROW} {D(MONITOR)}"
+    S.append(_p(T(f"ルールは次の順に適用し、最初に該当したものを採用します: {order_txt}。基準値は固定の標準値です。",
+                  f"Rules are applied in this order; the first match wins: {order_txt}. Thresholds are fixed standard values."), st["body"]))
+    tt = thresholds_table(res.thresholds, lang)
     half = (len(tt) + 1) // 2
-    rows = [["項目", "値", "項目", "値"]]
+    rows = [[T("項目", "Parameter"), T("値", "Value"), T("項目", "Parameter"), T("値", "Value")]]
     for i in range(half):
         a = tt[i]
         b2 = tt[i + half] if i + half < len(tt) else ("", "")
         rows.append([a[0], a[1], b2[0], b2[1]])
     S.append(_table(rows, [FW * .32, FW * .18, FW * .32, FW * .18], st))
-    S.append(_p("算出方法", st["h2"]))
+    S.append(_p(T("算出方法", "Method notes"), st["h2"]))
     for line in [
-        "PB売上 = 全体売上 × PB比率(売上ベース)。非PB売上 = 全体 − PB。PB売れ数 = 全体売れ数 × PB比率(売れ数ベース)。",
-        "増減要因: PB売上の増減 =(売上の増減 × 前期PBシェア)+(当期売上 × PBシェアの増減)をサブカテ全体で合計。誤差なしで完全に一致します。",
-        "PB比率の要因分解: シェア要因 = 平均売上構成比 × シェア変化。構成要因 = 平均PBシェア × 売上構成比の変化。誤差なしで完全に一致します。",
-        "追加SKU当たりPB売上増 = PB売上の増減 ÷ PB SKU数の増減(SKUが増えた場合のみ)。",
+        T("PB売上 = 全体売上 × PB比率(売上ベース)。非PB売上 = 全体 − PB。PB売れ数 = 全体売れ数 × PB比率(売れ数ベース)。",
+          "PB sales = total sales x PB ratio (sales basis); non-PB sales = total - PB. PB units = total units x PB ratio (units basis)."),
+        T("増減要因: PB売上の増減 =(売上の増減 × 前期PBシェア)+(当期売上 × PBシェアの増減)をサブカテ全体で合計。誤差なしで完全に一致します。",
+          "Growth bridge: change in PB sales = (sales change x prior PB share) + (current sales x PB share change), summed over sub-categories. Exact, no residual."),
+        T("PB比率の要因分解: シェア要因 = 平均売上構成比 × シェア変化。構成要因 = 平均PBシェア × 売上構成比の変化。誤差なしで完全に一致します。",
+          "PB ratio bridge: share effect = average sales weight x share change; mix effect = average PB share x change in sales weight. Exact, no residual."),
+        T("追加SKU当たりPB売上増 = PB売上の増減 ÷ PB SKU数の増減(SKUが増えた場合のみ)。",
+          "Extra PB sales per added SKU = change in PB sales / change in PB SKU count, only where SKUs increased."),
     ]:
         S.append(Paragraph(escape(line), st["bullet"], bulletText="•"))
 
-    S.append(_p("付録B. 全サブカテ一覧", st["h1"]))
-    rows = [["方向性", "サブカテ", f"売上 {cur}", "非PB", f"PBシェア {prev}→{cur}", "市場前年比", "PB SKU数"]]
+    S.append(_p(T("付録B. 全サブカテ一覧", "Appendix B. All sub-categories"), st["h1"]))
+    rows = [[T("方向性", "Direction"), sub_h, T(f"売上 {cur}", f"Sales {cur}"), T("非PB", "Non-PB"), T(f"PBシェア {prev}→{cur}", f"PB share {prev}→{cur}"),
+             T("市場前年比", "Mkt YoY"), T("PB SKU数", "PB SKUs")]]
     for dname in ORDER:
         for _, r in res.directions[dname].iterrows():
-            rows.append([dname, r["name"], _jpy(r.sales), _jpy(r.nb_cur), f"{r.share_prev * 100:.1f}%→{r.share_cur * 100:.1f}%",
-                         _signed_pct(r.yoy), f"{r.sku_prev:.0f}→{r.sku_cur:.0f}"])
+            rows.append([D(dname), r["name"], J(r.sales), J(r.nb_cur), f"{r.share_prev * 100:.1f}%{ARROW}{r.share_cur * 100:.1f}%",
+                         _signed_pct(r.yoy), f"{r.sku_prev:.0f}{ARROW}{r.sku_cur:.0f}"])
     S.append(_table(rows, [FW * .12, FW * .32, FW * .11, FW * .11, FW * .15, FW * .09, FW * .1], st))
 
-    doc.build(S, onFirstPage=_footer, onLaterPages=_footer)
+    doc.build(S, onFirstPage=footer, onLaterPages=footer)
     return buf.getvalue()

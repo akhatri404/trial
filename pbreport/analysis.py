@@ -25,6 +25,20 @@ V_PRUNED, V_SHRINK = "SKU削減・売上増", "SKU削減・売上減"
 V_STABLE_UP, V_STABLE_DOWN = "SKU横ばい・売上増", "SKU横ばい・売上減"
 V_NEW, V_EXIT, V_SMALL = "PB新規投入", "PB撤退", "小規模(判定外)"
 
+# Internal keys stay Japanese; `tr` translates them for display only.
+_EN = {
+    SCALE: "Scale", REPLICATE: "Replicate", RECAPTURE: "Recapture", TEST: "Test small", REVIEW: "Review",
+    DEFEND: "Defend", DEPRIORITIZE: "Deprioritize", MONITOR: "Monitor",
+    V_EFFICIENT: "Sales keep pace with SKUs", V_SKULED: "SKUs outpace sales", V_SKUDOWNSALES: "SKUs up, sales down",
+    V_PRUNED: "Pruned, sales up", V_SHRINK: "Shrinking", V_STABLE_UP: "Stable range, sales up",
+    V_STABLE_DOWN: "Stable range, sales down", V_NEW: "New PB range", V_EXIT: "PB range exited", V_SMALL: "Small base",
+}
+
+
+def tr(key, lang="ja"):
+    """Display name of a direction or verdict in the requested language."""
+    return key if lang == "ja" else _EN.get(key, key)
+
 
 @dataclass
 class Thresholds:
@@ -113,6 +127,7 @@ class Result:
     dq: list = field(default_factory=list)
     borderline: pd.DataFrame = None
     scope_note: str = ""
+    lang: str = "ja"
 
 
 # ------------------------------------------------------------------------------------------------------------
@@ -128,6 +143,24 @@ def _jpy(x) -> str:
     if a >= 1e4:
         return f"{sign}{a / 1e4:,.0f}万円"
     return f"{sign}{a:,.0f}円"
+
+
+def _usd(x) -> str:
+    """English money format: ¥1.78B / ¥53M / ¥8,000."""
+    if x is None or x != x:
+        return "–"
+    sign, a = ("-" if x < 0 else ""), abs(x)
+    if a >= 1e9:
+        return f"{sign}¥{a / 1e9:,.2f}B"
+    if a >= 1e8:
+        return f"{sign}¥{a / 1e6:,.0f}M"
+    if a >= 1e6:
+        return f"{sign}¥{a / 1e6:,.1f}M"
+    return f"{sign}¥{a:,.0f}"
+
+
+def money(lang="ja"):
+    return _jpy if lang == "ja" else _usd
 
 
 def _div(a, b):
@@ -182,8 +215,11 @@ def _classify_all(d: pd.DataFrame, t: Thresholds) -> pd.Series:
 
 
 # ------------------------------------------------------------------------------------------------------------
-def analyze(data: WorkbookData, t: Thresholds | None = None) -> Result:
+def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -> Result:
     t = t or Thresholds()
+    T = lambda ja, en: ja if lang == "ja" else en     # pick the display text
+    J = money(lang)
+    SEP = T("、", ", ")
     df, periods = data.df.copy(), data.periods
 
     # ---- which periods are full years, which one is partial ------------------------------------------------
@@ -336,11 +372,12 @@ def analyze(data: WorkbookData, t: Thresholds | None = None) -> Result:
         tgt = None
         if r.direction == SCALE:
             tgt = min(t.upside_scale_cap, r.share_cur + t.upside_scale_momentum_years * (r.share_cur - r.share_prev))
-            basis = f"勢い{t.upside_scale_momentum_years:g}年継続(上限{t.upside_scale_cap:.0%})"
+            basis = T(f"勢い{t.upside_scale_momentum_years:g}年継続(上限{t.upside_scale_cap:.0%})",
+                      f"momentum x{t.upside_scale_momentum_years:g} yrs (cap {t.upside_scale_cap:.0%})")
         elif r.direction == RECAPTURE:
-            tgt, basis = r.share_prev, "前期シェアに回復"
+            tgt, basis = r.share_prev, T("前期シェアに回復", "restore previous-period share")
         elif r.direction == REPLICATE:
-            tgt, basis = t.upside_replicate_share, f"シェア{t.upside_replicate_share:.0%}"
+            tgt, basis = t.upside_replicate_share, T(f"シェア{t.upside_replicate_share:.0%}", f"{t.upside_replicate_share:.0%} share")
         if tgt is not None and tgt > r.share_cur:
             rows.append(dict(name=r["name"], direction=r.direction, sales=r.sales, share_cur=r.share_cur,
                              target=tgt, add=(tgt - r.share_cur) * r.sales, basis=basis))
@@ -380,45 +417,64 @@ def analyze(data: WorkbookData, t: Thresholds | None = None) -> Result:
         dq.append(("warn", w))
     if data.category_only:
         covered = float(d.loc[d.source == "カテゴリー", "sales"].sum())
-        dq.append(("info", f"サブカテ行のないカテゴリーは「カテゴリー」シートから取り込み、全ての合計に含めました: "
-                           f"{'、'.join(data.category_only)}({cur}期売上 {_jpy(covered)})。これらはカテゴリー単位の明細のみです。"))
+        cats_ = SEP.join(data.category_only)
+        dq.append(("info", T(f"サブカテ行のないカテゴリーは「カテゴリー」シートから取り込み、全ての合計に含めました: "
+                             f"{cats_}({cur}期売上 {J(covered)})。これらはカテゴリー単位の明細のみです。",
+                             f"Categories with no sub-category rows were taken from the category sheet and included in all totals: "
+                             f"{cats_} ({J(covered)} of {cur}期 sales). Their detail is category-level only.")))
     if len(recon):
         bad = recon[~recon.ok]
         if bad.empty:
-            dq.append(("info", f"照合: 算出した売上とPB比率は、元資料の部門合計と全{recon.scope.nunique()}区分・"
-                               f"{recon.period.nunique()}期で一致しました。"))
+            dq.append(("info", T(f"照合: 算出した売上とPB比率は、元資料の部門合計と全{recon.scope.nunique()}区分・"
+                                 f"{recon.period.nunique()}期で一致しました。",
+                                 f"Reconciliation: computed sales and PB ratios match the source's department totals for all "
+                                 f"{recon.scope.nunique()} scopes and {recon.period.nunique()} periods.")))
         else:
             for _, r in bad.head(4).iterrows():
-                dq.append(("warn", f"照合差異 {r.scope}({r.period}期): 元資料合計に対し売上 {r.sales_diff:+.2%}、PB比率 {r.ratio_diff_pt:+.2f}pt。"))
+                dq.append(("warn", T(f"照合差異 {r.scope}({r.period}期): 元資料合計に対し売上 {r.sales_diff:+.2%}、PB比率 {r.ratio_diff_pt:+.2f}pt。",
+                                     f"Reconciliation gap in {r.scope} ({r.period}期): sales {r.sales_diff:+.2%}, PB ratio {r.ratio_diff_pt:+.2f} pt vs the source total.")))
     elif not data.reported:
-        dq.append(("info", "「方向性」シートの部門合計が見つからないため、元資料との照合はできませんでした。"))
+        dq.append(("info", T("「方向性」シートの部門合計が見つからないため、元資料との照合はできませんでした。",
+                             "No 「方向性」 department totals were found, so the totals could not be reconciled with the source.")))
     bad_ratio = int(((df[[f"pb_ratio_sales_{p}" for p in periods]] > 1.0001) | (df[[f"pb_ratio_sales_{p}" for p in periods]] < 0)).sum().sum()
                     + ((df[[f"pb_ratio_units_{p}" for p in periods]] > 1.0001) | (df[[f"pb_ratio_units_{p}" for p in periods]] < 0)).sum().sum())
     neg = int((df[[f"sales_{p}" for p in periods] + [f"units_{p}" for p in periods]] < 0).sum().sum())
     if bad_ratio or neg:
-        dq.append(("warn", f"不正な値: 0〜100%の範囲外のPB比率が{bad_ratio}件、売上・売れ数のマイナス値が{neg}件あります。"))
+        dq.append(("warn", T(f"不正な値: 0〜100%の範囲外のPB比率が{bad_ratio}件、売上・売れ数のマイナス値が{neg}件あります。",
+                             f"Invalid values: {bad_ratio} PB ratios outside 0-100% and {neg} negative sales/units cells.")))
     dup = int(d.duplicated(["cat", "sub"]).sum())
     if dup:
-        dq.append(("warn", f"カテゴリー/サブカテの重複行が{dup}件あります。元資料を確認してください。"))
+        dq.append(("warn", T(f"カテゴリー/サブカテの重複行が{dup}件あります。元資料を確認してください。",
+                             f"{dup} duplicated category/sub-category rows were found; check the source.")))
     ghost = d[(d.sku_cur > 0) & (d.pb_cur <= 0)]
     if len(ghost):
-        dq.append(("info", f"PB SKUはあるが{cur}期のPB売上がないサブカテが{len(ghost)}件あります: " + "、".join(ghost["name"].head(4)) + "。"))
+        ex = SEP.join(ghost["name"].head(4))
+        dq.append(("info", T(f"PB SKUはあるが{cur}期のPB売上がないサブカテが{len(ghost)}件あります: {ex}。",
+                             f"{len(ghost)} sub-categories list PB SKUs but have no PB sales in {cur}期: {ex}.")))
     nosku = d[(d.sku_cur <= 0) & (d.pb_cur > 0)]
     if len(nosku):
-        dq.append(("warn", f"PB売上はあるがPB SKU数が0のサブカテが{len(nosku)}件あります: " + "、".join(nosku["name"].head(4)) + "。"))
+        ex = SEP.join(nosku["name"].head(4))
+        dq.append(("warn", T(f"PB売上はあるがPB SKU数が0のサブカテが{len(nosku)}件あります: {ex}。",
+                             f"{len(nosku)} sub-categories have PB sales but a PB SKU count of 0: {ex}.")))
     zero_units = d[((d.sales > 0) & (d.units <= 0)) | ((d.sales <= 0) & (d.units > 0))]
     if len(zero_units):
-        dq.append(("warn", f"売上があるのに売れ数がない(またはその逆の)行が{len(zero_units)}件あります: " + "、".join(zero_units["name"].head(4)) + "。"))
+        ex = SEP.join(zero_units["name"].head(4))
+        dq.append(("warn", T(f"売上があるのに売れ数がない(またはその逆の)行が{len(zero_units)}件あります: {ex}。",
+                             f"{len(zero_units)} rows have sales without units (or units without sales): {ex}.")))
     asp_out = d[(d.asp_chg.abs() > t.asp_flag) & (d.sales >= t.min_headroom / 2)].sort_values("sales", ascending=False)
     if len(asp_out):
-        examples = "、".join(f"{r['name']} {r.asp_chg:+.0%}" for _, r in asp_out.head(3).iterrows())
-        dq.append(("info", f"規模の大きいサブカテ{len(asp_out)}件で、平均単価が{t.asp_flag:.0%}超変動しています({examples})。"
-                           "価格・容量・商品構成の変化によるものです。数量の伸びを読む前に売れ数の定義を確認してください。"))
+        examples = SEP.join(f"{r['name']} {r.asp_chg:+.0%}" for _, r in asp_out.head(3).iterrows())
+        dq.append(("info", T(f"規模の大きいサブカテ{len(asp_out)}件で、平均単価が{t.asp_flag:.0%}超変動しています({examples})。"
+                             "価格・容量・商品構成の変化によるものです。数量の伸びを読む前に売れ数の定義を確認してください。",
+                             f"Average price per unit moved by more than {t.asp_flag:.0%} in {len(asp_out)} larger sub-categories "
+                             f"({examples}). This is price or pack-size/mix change; check the unit definition before reading volume growth.")))
     gone = d[(d.yoy <= -0.5) & (d.sales_prev >= 5e6)]
     if len(gone):
-        dq.append(("info", f"売上が前年比で半分以下になったサブカテが{len(gone)}件あります(例: "
-                           + "、".join(f"{r['name']} {r.yoy:+.0%}" for _, r in gone.sort_values('sales_prev', ascending=False).head(3).iterrows())
-                           + ")。小規模または終売の可能性があり、成長率は参考になりません。"))
+        examples = SEP.join(f"{r['name']} {r.yoy:+.0%}" for _, r in gone.sort_values('sales_prev', ascending=False).head(3).iterrows())
+        dq.append(("info", T(f"売上が前年比で半分以下になったサブカテが{len(gone)}件あります(例: {examples})。"
+                             "小規模または終売の可能性があり、成長率は参考になりません。",
+                             f"{len(gone)} sub-categories lost more than half of their sales year on year (e.g. {examples}): "
+                             "small bases or discontinued ranges. Growth percentages there are not meaningful.")))
 
     # ---- sensitivity: which classifications flip when thresholds move? -------------------------------------
     base_lab = d.direction
@@ -445,21 +501,32 @@ def analyze(data: WorkbookData, t: Thresholds | None = None) -> Result:
         actual = sl / S1 if S1 else float("nan")
         if data.partial_months:
             exp = data.partial_months / 12
-            note = (f"{latest}期は{data.partial_months}ヶ月分とされていますが、売上は{cur}期通期の{actual:.0%}です"
-                    f"({data.partial_months}ヶ月分なら約{exp:.0%})。")
+            note = T(f"{latest}期は{data.partial_months}ヶ月分とされていますが、売上は{cur}期通期の{actual:.0%}です"
+                     f"({data.partial_months}ヶ月分なら約{exp:.0%})。",
+                     f"The {latest} period is marked as {data.partial_months} months, but its sales are "
+                     f"{actual:.0%} of the {cur} full year; {data.partial_months} months would be about {exp:.0%}.")
             if abs(actual - exp) > t.partial_ratio_tolerance:
-                cav.append(note + "対象月数が多いか季節性が強い可能性があるため、期間を確認してください。"
-                                  f"{latest}期はPB比率とSKU数のみに使用し、成長率には使用していません。")
+                cav.append(note + T("対象月数が多いか季節性が強い可能性があるため、期間を確認してください。"
+                                    f"{latest}期はPB比率とSKU数のみに使用し、成長率には使用していません。",
+                                    " It may cover more months or be strongly seasonal, so confirm the period. "
+                                    f"{latest} is used only for PB ratios and SKU counts, never for growth."))
             else:
-                cav.append(f"{latest}期は{data.partial_months}ヶ月分のため、PB比率とSKU数のみに使用し、成長率には使用していません。")
+                cav.append(T(f"{latest}期は{data.partial_months}ヶ月分のため、PB比率とSKU数のみに使用し、成長率には使用していません。",
+                             f"The {latest} period covers {data.partial_months} months and is used only for PB ratios and SKU counts, never for growth."))
         else:
-            cav.append(f"{latest}期は途中期と判断しました(売上が{cur}期の{actual:.0%})。PB比率とSKU数のみに使用しています。")
-        cav.append(f"途中期のPBシェアは年間の一部の期間のみを対象とするため(季節性)、{latest}期と{cur}期のシェア比較は参考値であり、同条件の比較ではありません。")
+            cav.append(T(f"{latest}期は途中期と判断しました(売上が{cur}期の{actual:.0%})。PB比率とSKU数のみに使用しています。",
+                         f"The {latest} period looks partial (sales are {actual:.0%} of {cur}) and is used only for PB ratios and SKU counts."))
+        cav.append(T(f"途中期のPBシェアは年間の一部の期間のみを対象とするため(季節性)、{latest}期と{cur}期のシェア比較は参考値であり、同条件の比較ではありません。",
+                     f"PB share in a partial period covers a different part of the year (seasonality), so {latest} vs {cur} share changes are indicative, not like-for-like."))
     cav += [
-        "粗利・原価のデータはありません。本資料はすべて売上シェアに基づくため、PBシェアが高くても利益が高いとは限りません。",
-        "平均単価には価格変更・容量変更・商品構成の変化が混在しています。数量と価格に関する記述は参考値です。",
-        "期中に追加したSKUは通年の売上実績がないため、SKU当たり売上は定常時の生産性を過小評価しています。"
-        "「PB SKU数」が期中に販売実績のあるSKUのみを数えている場合、SKU希薄化の指摘もやや過大になります。",
+        T("粗利・原価のデータはありません。本資料はすべて売上シェアに基づくため、PBシェアが高くても利益が高いとは限りません。",
+          "There is no margin or cost data. Everything here is sales share, so a high PB share is not necessarily high profit."),
+        T("平均単価には価格変更・容量変更・商品構成の変化が混在しています。数量と価格に関する記述は参考値です。",
+          "Average price per unit mixes price changes, pack-size changes and product mix. Volume vs price statements are indicative only."),
+        T("期中に追加したSKUは通年の売上実績がないため、SKU当たり売上は定常時の生産性を過小評価しています。"
+          "「PB SKU数」が期中に販売実績のあるSKUのみを数えている場合、SKU希薄化の指摘もやや過大になります。",
+          "SKUs added during the year have not had a full year of sales, so sales per SKU understates their steady-state productivity. "
+          "If 「PB SKU数」 counts only SKUs that sold in the period, the dilution finding is also somewhat overstated."),
     ]
 
     directions = {k: d[d.direction == k].sort_values("nb_cur", ascending=False).reset_index(drop=True) for k in ORDER}
@@ -468,42 +535,63 @@ def analyze(data: WorkbookData, t: Thresholds | None = None) -> Result:
     f = []
     top = c.sort_values("d_pb", ascending=False).iloc[0]
     sn = top.d_pb / bridge["d_pb"] if bridge["d_pb"] > 0 else np.nan
-    f.append(f"PB売上は{_jpy(PB0)}→{_jpy(PB1)}({_jpy(bridge['d_pb'])}、{kpi['pb_yoy']:+.1%})、PB比率は"
-             f"{R0:.1%}→{R1:.1%}({(R1 - R0) * 100:+.2f}pt)。{top['cat']}の寄与は{_jpy(top.d_pb)}"
-             + (f"で、純増の約{sn:.0%}を占めます。" if pd.notna(sn) and sn > 0 else "です。"))
+    has_sn = pd.notna(sn) and sn > 0
+    f.append(T(f"PB売上は{J(PB0)}→{J(PB1)}({J(bridge['d_pb'])}、{kpi['pb_yoy']:+.1%})、PB比率は"
+               f"{R0:.1%}→{R1:.1%}({(R1 - R0) * 100:+.2f}pt)。{top['cat']}の寄与は{J(top.d_pb)}"
+               + (f"で、純増の約{sn:.0%}を占めます。" if has_sn else "です。"),
+               f"PB sales moved {J(PB0)} → {J(PB1)} ({J(bridge['d_pb'])}, {kpi['pb_yoy']:+.1%}) and the PB ratio "
+               f"{R0:.1%} → {R1:.1%} ({(R1 - R0) * 100:+.2f} pt). {top['cat']} contributed {J(top.d_pb)}"
+               + (f", about {sn:.0%} of the net change." if has_sn else ".")))
     if bridge["d_pb"] > 0:
-        f.append(f"増加分のうち{_jpy(bridge['market'])}({bridge['market'] / bridge['d_pb']:.0%})は前期PBシェアのままでの市場成長、"
-                 f"{_jpy(bridge['share'])}({bridge['share'] / bridge['d_pb']:.0%})はシェアの純変化によるものです"
-                 f"(シェア上昇 {_jpy(bridge['share_gain'])}、シェア低下 {_jpy(bridge['share_loss'])})。")
-    f.append(f"PB比率の変化{bridge['d_ratio_pt']:+.2f}ptの内訳は、サブカテ内のシェア変化が{bridge['rate_pt']:+.2f}pt、"
-             f"サブカテ間の売上構成の変化が{bridge['mix_pt']:+.2f}ptです。")
+        f.append(T(f"増加分のうち{J(bridge['market'])}({bridge['market'] / bridge['d_pb']:.0%})は前期PBシェアのままでの市場成長、"
+                   f"{J(bridge['share'])}({bridge['share'] / bridge['d_pb']:.0%})はシェアの純変化によるものです"
+                   f"(シェア上昇 {J(bridge['share_gain'])}、シェア低下 {J(bridge['share_loss'])})。",
+                   f"Of that growth, {J(bridge['market'])} ({bridge['market'] / bridge['d_pb']:.0%}) came from market growth at last year's PB shares and "
+                   f"{J(bridge['share'])} ({bridge['share'] / bridge['d_pb']:.0%}) from net share change "
+                   f"(gains {J(bridge['share_gain'])}, losses {J(bridge['share_loss'])})."))
+    f.append(T(f"PB比率の変化{bridge['d_ratio_pt']:+.2f}ptの内訳は、サブカテ内のシェア変化が{bridge['rate_pt']:+.2f}pt、"
+               f"サブカテ間の売上構成の変化が{bridge['mix_pt']:+.2f}ptです。",
+               f"The PB ratio change of {bridge['d_ratio_pt']:+.2f} pt splits into {bridge['rate_pt']:+.2f} pt from share change inside sub-categories "
+               f"and {bridge['mix_pt']:+.2f} pt from the sales mix shifting between sub-categories."))
     if pd.notna(kpi["pb_units_yoy"]) and pd.notna(kpi["nb_units_yoy"]):
-        f.append(f"数量面: PB売れ数{kpi['pb_units_yoy']:+.1%}、非PB売れ数{kpi['nb_units_yoy']:+.1%}。全体の売れ数{kpi['units_yoy']:+.1%}に対し売上は"
-                 f"{kpi['sales_yoy']:+.1%}で、市場の売上成長は価格・構成要因によるものです。")
+        f.append(T(f"数量面: PB売れ数{kpi['pb_units_yoy']:+.1%}、非PB売れ数{kpi['nb_units_yoy']:+.1%}。全体の売れ数{kpi['units_yoy']:+.1%}に対し売上は"
+                   f"{kpi['sales_yoy']:+.1%}で、市場の売上成長は価格・構成要因によるものです。",
+                   f"Volume view: PB units {kpi['pb_units_yoy']:+.1%} vs non-PB units {kpi['nb_units_yoy']:+.1%}; total units {kpi['units_yoy']:+.1%} while sales "
+                   f"{kpi['sales_yoy']:+.1%}, so market sales growth reflects price/mix."))
     if pd.notna(kpi["per_sku_chg"]):
-        s = (f"PB SKU数は{sk0:.0f}→{sk1:.0f}({kpi['sku_growth']:+.0%})、PB売上は{kpi['pb_yoy']:+.0%}。PB SKU当たり売上は"
-             f"{_jpy(kpi['per_sku_prev'])}→{_jpy(kpi['per_sku_cur'])}({kpi['per_sku_chg']:+.0%})")
+        s_ja = (f"PB SKU数は{sk0:.0f}→{sk1:.0f}({kpi['sku_growth']:+.0%})、PB売上は{kpi['pb_yoy']:+.0%}。PB SKU当たり売上は"
+                f"{J(kpi['per_sku_prev'])}→{J(kpi['per_sku_cur'])}({kpi['per_sku_chg']:+.0%})")
+        s_en = (f"PB SKUs went {sk0:.0f} → {sk1:.0f} ({kpi['sku_growth']:+.0%}) while PB sales moved {kpi['pb_yoy']:+.0%}; sales per PB SKU "
+                f"{J(kpi['per_sku_prev'])} → {J(kpi['per_sku_cur'])} ({kpi['per_sku_chg']:+.0%})")
         if pd.notna(kpi["marg_per_sku"]):
-            s += f"。追加SKU1つ当たりのPB売上増は平均{_jpy(kpi['marg_per_sku'])}"
+            s_ja += f"。追加SKU1つ当たりのPB売上増は平均{J(kpi['marg_per_sku'])}"
+            s_en += f"; each added SKU brought {J(kpi['marg_per_sku'])} of extra PB sales on average"
         if latest and pd.notna(kpi.get("sku_latest")):
-            s += f"。{latest}期のPB SKU数は{kpi['sku_latest']:.0f}"
-        f.append(s + "です。")
-    f.append(f"PB売上は集中しています。上位3サブカテ({'、'.join(conc['top3_names'])})でPB売上の{conc['top3']:.0%}、"
-             f"{conc['n_for_80']}サブカテで80%を占めます。")
+            s_ja += f"。{latest}期のPB SKU数は{kpi['sku_latest']:.0f}"
+            s_en += f". The PB SKU count in {latest} is {kpi['sku_latest']:.0f}"
+        f.append(T(s_ja + "です。", s_en + "."))
+    f.append(T(f"PB売上は集中しています。上位3サブカテ({'、'.join(conc['top3_names'])})でPB売上の{conc['top3']:.0%}、"
+               f"{conc['n_for_80']}サブカテで80%を占めます。",
+               f"PB sales are concentrated: the top 3 sub-categories ({', '.join(conc['top3_names'])}) are {conc['top3']:.0%} of PB sales "
+               f"and {conc['n_for_80']} sub-categories make up 80%."))
     bigs = d.sort_values("nb_cur", ascending=False)
     bigs = bigs[(bigs.share_cur <= t.white_space_max_share) | (bigs.d_share_pt <= -t.recapture_drop_pt)].head(3)
     if len(bigs):
-        f.append("PBがほぼ未展開の大きな非PB売上: " + "、".join(
-            f"{r['name']}(非PB {_jpy(r.nb_cur)}、PB {r.share_cur:.1%})" for _, r in bigs.iterrows()) + "。")
+        f.append(T("PBがほぼ未展開の大きな非PB売上: " + "、".join(
+                       f"{r['name']}(非PB {J(r.nb_cur)}、PB {r.share_cur:.1%})" for _, r in bigs.iterrows()) + "。",
+                   "Largest non-PB pools with little or no PB position: " + "; ".join(
+                       f"{r['name']} ({J(r.nb_cur)} non-PB, PB {r.share_cur:.1%})" for _, r in bigs.iterrows()) + "."))
 
-    scope = f"対象: 全{len(d)}サブカテ行" + (f"(「カテゴリー」シートから取り込んだ{len(data.category_only)}カテゴリー: {'、'.join(data.category_only)}を含む)" if data.category_only else "") + "。"
+    cat_only = SEP.join(data.category_only)
+    scope = T(f"対象: 全{len(d)}サブカテ行" + (f"(「カテゴリー」シートから取り込んだ{len(data.category_only)}カテゴリー: {cat_only}を含む)" if data.category_only else "") + "。",
+              f"Scope: all {len(d)} sub-category rows" + (f", incl. {len(data.category_only)} categories from the category sheet ({cat_only})" if data.category_only else "") + ".")
     return Result((prev, cur), latest, data.partial_months, kpi, d, c, directions, flags, up, up_total, cav, t, f,
-                  bridge, rankings, watch, conc, recon, dq, bl, scope)
+                  bridge, rankings, watch, conc, recon, dq, bl, scope, lang)
 
 
-def thresholds_table(t: Thresholds):
+def thresholds_table(t: Thresholds, lang: str = "ja"):
     def fmt(v):
         if isinstance(v, float) and abs(v) < 100:
             return f"{v:,.3f}".rstrip("0").rstrip(".") if v != int(v) else f"{v:,.0f}"
         return f"{v:,.0f}"
-    return [(THRESHOLD_LABELS.get(k, k), fmt(v)) for k, v in asdict(t).items()]
+    return [(THRESHOLD_LABELS.get(k, k) if lang == "ja" else k, fmt(v)) for k, v in asdict(t).items()]

@@ -1,10 +1,10 @@
-"""CLI:  python -m pbreport input.xlsx [-o report] [-f pdf|pptx|both]   |   python -m pbreport --watch inbox/ outbox/ [-f both]"""
+"""CLI:  python -m pbreport input.xlsx [-o report] [-f pdf|pdf_en|pptx|both]   |   python -m pbreport --watch inbox/ outbox/ [-f both]"""
 import argparse
 import sys
 import time
 from pathlib import Path
 
-from . import generate_report, WorkbookError
+from . import generate_report, WorkbookError, FORMATS
 
 
 def _one(src: Path, out: Path, fmt: str):
@@ -16,7 +16,7 @@ def _one(src: Path, out: Path, fmt: str):
 def _targets(base: Path, fmt: str):
     """base is the path without a meaningful extension; returns [(path, fmt)]."""
     fmts = ["pdf", "pptx"] if fmt == "both" else [fmt]
-    return [(base.with_suffix("." + f), f) for f in fmts]
+    return [((base.with_name(base.name + "_en") if f == "pdf_en" else base).with_suffix(FORMATS[f][2]), f) for f in fmts]
 
 
 def main(argv=None):
@@ -24,7 +24,7 @@ def main(argv=None):
     ap.add_argument("input", nargs="?", help="Excelファイル(.xlsx)。--watch 指定時は受信フォルダ")
     ap.add_argument("output", nargs="?", help="出力先のパス。--watch 指定時は出力フォルダ")
     ap.add_argument("-o", "--out", help="出力先のパス(単一ファイル時)。拡張子は --format で決まります")
-    ap.add_argument("-f", "--format", choices=["pdf", "pptx", "both"], default="pdf", help="レポート形式(既定: pdf)")
+    ap.add_argument("-f", "--format", choices=["pdf", "pdf_en", "pptx", "both"], default="pdf", help="レポート形式: pdf=日本語PDF、pdf_en=英語PDF、pptx=PowerPoint、both=pdf+pptx(既定: pdf)")
     ap.add_argument("--watch", action="store_true", help="受信フォルダを監視し、新しい .xlsx ごとにレポートを作成")
     ap.add_argument("--interval", type=float, default=5.0, help="--watch 時のフォルダ確認間隔(秒)")
     a = ap.parse_args(argv)

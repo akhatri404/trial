@@ -248,7 +248,7 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
         _text(s, x + 0.2, 5.12, 2.3, 0.3, lab, 12, "D6EBEC")
         _text(s, x + 0.2, 5.42, 2.3, 0.55, val, 28, "FFFFFF", bold=True)
         _text(s, x + 0.2, 5.98, 2.3, 0.3, f"{prev}期比 {chg}", 12, ACCENT, bold=True)
-    _notes(s, f"PB戦略資料(自動生成)。比較期間: {prev}期 vs {cur}期。Trial / トーエーの方向性の記載は使用していません。")
+    _notes(s, f"PB戦略資料(自動生成)。比較期間: {prev}期 vs {cur}期。トライアルの方向性の記載は使用していません。")
 
     # ---------------------------------------------------------------- 2. takeaways
     s = prs.slides.add_slide(L_TONLY)
@@ -546,7 +546,7 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
     for part, chunk in enumerate((tt[:half], tt[half:])):
         rows = [["項目", "値"]] + [[a, b] for a, b in chunk]
         _table(s, rows, [3.9, 1.6], MX + part * 6.1, 1.8, row_h=0.33, size=10, right_cols=(1,), name=f"Thresholds {part + 1}")
-    _notes(s, "基準値はすべてアプリのサイドバーまたはコマンドラインで変更できます。")
+    _notes(s, "基準値は固定の標準値です。")
 
     buf = io.BytesIO()
     prs.save(buf)

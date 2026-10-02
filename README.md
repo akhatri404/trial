@@ -15,15 +15,15 @@ Upload the pet-category Excel workbook (the one with the 「サブカテ」 shee
    * **PDF** (`pbreport/pdf.py`): about 9 pages with an embedded Japanese font; rules, method notes and every sub-category in the appendix.
    * **PowerPoint** (`pbreport/pptx_report.py`): 19-slide 16:9 deck with real slide titles, *native* charts and tables (editable in PowerPoint), speaker notes on every slide, Calibri / Yu Gothic fonts.
 
-All report text, the app screen and error messages are in Japanese; amounts use 億円 / 万円. The analysis is deterministic: the same file always gives the same report. Trial / トーエー direction markers and the 過去資料 sheet are ignored.
+The PDF (日本語), PowerPoint, app screen and error messages are in Japanese; an English PDF (`-f pdf_en`) is also available (category names and other Excel labels stay Japanese); amounts use 億円 / 万円. The analysis is deterministic: the same file always gives the same report. トライアル direction markers and the 過去資料 sheet are ignored.
 
 ## Run it
 ```bash
 ./run.sh                                  # installs requirements, then starts the app on port 8501
 # or by hand:
 pip install -r requirements.txt
-streamlit run app.py                      # upload page -> choose PDF or PowerPoint -> download
-python -m pbreport input.xlsx -f pptx -o out    # command line; -f pdf | pptx | both
+streamlit run app.py                      # upload page -> choose PDF (日本語) / PDF (English) / PowerPoint -> download
+python -m pbreport input.xlsx -f pptx -o out    # command line; -f pdf | pdf_en | pptx | both
 python -m pbreport --watch inbox/ reports/ -f both   # drop an .xlsx in inbox/, reports appear in reports/
 ```
 
@@ -42,7 +42,7 @@ Sheet name contains 「サブカテ」; a header row with 部門 / カテゴリ 
 (a 「※Nヶ月分」 note on the 「方向性」 sheet, or sales under 60% of the previous period) it is used only for PB-ratio trend.
 
 ## Changing the rules
-All thresholds are in `Thresholds` (`pbreport/analysis.py`) and editable in the app sidebar. Fonts: bundled IPAex Gothic (see `fonts/`, IPA Font License);
+All thresholds are fixed defaults in `Thresholds` (`pbreport/analysis.py`) and are listed in the report appendix. Fonts: bundled IPAex Gothic (see `fonts/`, IPA Font License);
 set `PBREPORT_FONT` to use another TrueType font.
 
 ## Tests
