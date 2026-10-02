@@ -23,7 +23,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle)
 
 from .analysis import (DEFEND, DEPRIORITIZE, MONITOR, ORDER, RECAPTURE, REPLICATE, REVIEW, SCALE, TEST, V_SMALL, Result,
-                       money, thresholds_table, tr)
+                       key_notes, money, tr)
 
 NAVY = colors.HexColor("#1F3864")
 GREY = colors.HexColor("#595959")
@@ -199,7 +199,7 @@ def build_pdf(res: Result, source_name: str = "") -> bytes:
     buf = io.BytesIO()
     title = T("ペットカテゴリー PB戦略レポート", "Pet category PB strategy report")
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=14 * mm,
-                            bottomMargin=16 * mm, title=title, author=T("PBレポート自動生成", "PB report generator"))
+                            bottomMargin=16 * mm, title=title, author=T("PB戦略レポート", "PB strategy report"))
     FW = A4[0] - 30 * mm
     S = []
     H1 = lambda txt: S.append(_p(txt, st["h1"]))
@@ -211,7 +211,7 @@ def build_pdf(res: Result, source_name: str = "") -> bytes:
         canvas.saveState()
         canvas.setFont(f, 7)
         canvas.setFillColor(GREY)
-        canvas.drawString(15 * mm, 8 * mm, T("PB戦略レポート(自動生成)", "PB strategy report (auto-generated)"))
+        canvas.drawString(15 * mm, 8 * mm, T("PB戦略レポート", "PB strategy report"))
         canvas.drawRightString(A4[0] - 15 * mm, 8 * mm, T(f"{doc_.page}ページ", f"Page {doc_.page}"))
         canvas.restoreState()
 
@@ -277,9 +277,9 @@ def build_pdf(res: Result, source_name: str = "") -> bytes:
     cn = res.concentration
     S.append(Spacer(1, 3))
     NOTE(T(f"集中度: 上位3サブカテ = PB売上の{cn['top3']:.0%}({prev}期は{cn['top3_prev']:.0%})、上位5 = {cn['top5']:.0%}。"
-           f"PB展開中の{cn['n_active']}サブカテのうち{cn['n_for_80']}サブカテで80%を占めます(HHI {cn['hhi']:.3f})。",
+           f"PB展開中の{cn['n_active']}サブカテのうち{cn['n_for_80']}サブカテで80%を占めます。",
            f"Concentration: top 3 sub-categories = {cn['top3']:.0%} of PB sales ({cn['top3_prev']:.0%} in {prev}期); top 5 = {cn['top5']:.0%}; "
-           f"{cn['n_for_80']} of {cn['n_active']} PB-active sub-categories make up 80% (HHI {cn['hhi']:.3f})."))
+           f"{cn['n_for_80']} of {cn['n_active']} PB-active sub-categories make up 80%."))
 
     # ---- 3. movers + pools ----
     H1(T("3. PB売上の増減と伸びしろ", "3. Where PB sales moved, and where the headroom is"))
@@ -369,8 +369,8 @@ def build_pdf(res: Result, source_name: str = "") -> bytes:
     # ---- 6. directions ----
     S.append(PageBreak())
     H1(T("6. 方向性の提案(データに基づく。トライアルの記載は不使用)", "6. Proposed direction (data-driven; トライアル markers not used)"))
-    BODY(T("各サブカテは明示的なルール(付録参照)により1つの方向性に分類しています。非PB = 直近の通期における全体売上 − PB売上。",
-           "Each sub-category is assigned to one direction by transparent rules (see appendix). Non-PB = total sales minus PB sales in the latest full period."))
+    BODY(T("各サブカテは、PBシェアの水準と推移、市場の規模と成長に基づいて1つの方向性に分類しています。非PB = 直近の通期における全体売上 − PB売上。",
+           "Each sub-category is placed in one direction based on its PB share level and trend, and on market size and growth. Non-PB = total sales minus PB sales in the latest full period."))
     latest_suffix = f"{ARROW}{res.period_latest}" if res.period_latest else ""
     hdr = [sub_h, T(f"売上 {cur}", f"Sales {cur}"), T("非PB", "Non-PB"), T(f"PBシェア {prev}→{cur}", f"PB share {prev}→{cur}") + latest_suffix,
            T("市場前年比", "Mkt YoY")]
@@ -393,14 +393,6 @@ def build_pdf(res: Result, source_name: str = "") -> bytes:
         if len(x) > len(show):
             block.append(_p(T(f"ほか{len(x) - len(show)}件(付録参照)", f"+ {len(x) - len(show)} more (see appendix)"), st["small"]))
         S.append(KeepTogether(block))
-    if res.borderline is not None and len(res.borderline):
-        H2(T("境界線上の分類", "Borderline classifications"))
-        alts_ = lambda s_: T("・", ", ").join(D(a) for a in s_.split("・"))     # alternatives are stored joined by 「・」
-        pairs = T("/", "; ").join(f"{r['name']}({D(r.base)}→{alts_(r.alternatives)})" for _, r in res.borderline.iterrows())
-        NOTE(T("以下は、基準値を概ね±25%(伸びしろ)、±1pt(シェア上昇)、±60%(PB未展開シェア)、±10pt(防衛シェア)動かすと方向性が変わります。"
-               f"判断が必要な項目として扱ってください: {pairs}。",
-               "These would change direction if thresholds moved by roughly ±25% (headroom), ±1 pt (share gain), ±60% (no-PB share) or ±10 pt (defend share). "
-               f"Treat them as judgement calls: {pairs}."))
 
     # ---- 7. upside ----
     H1(T("7. 伸びしろの試算(仮定に基づく)", "7. Illustrative upside (assumption-based)"))
@@ -423,51 +415,14 @@ def build_pdf(res: Result, source_name: str = "") -> bytes:
                      T(f"{J(u['add'])}(PB売上の{_signed_pct(u['pct_of_pb'], 0)})", f"{J(u['add'])} ({_signed_pct(u['pct_of_pb'], 0)} of PB sales)")])
         S.append(_table(rows, [FW * .34, FW * .13, FW * .13, FW * .2, FW * .2], st))
 
-    # ---- 8. caveats + data checks ----
-    H1(T("8. 会議前に確認すべき注意点", "8. Caveats to settle before the meeting"))
-    for c in res.caveats:
-        S.append(Paragraph(escape(c), st["bullet"], bulletText="•"))
-    H1(T("9. データチェックと照合", "9. Data checks and reconciliation"))
-    for sev, msg in res.dq:
-        S.append(Paragraph(escape((T("要確認: ", "Check: ") if sev == "warn" else "") + msg), st["bullet"], bulletText="•" if sev == "info" else "!"))
-    if res.recon is not None and len(res.recon):
-        rc = res.recon[res.recon.period == cur]
-        rows = [[T("区分", "Scope"), T(f"元資料の売上 {cur}", f"Source sales {cur}"), T("算出した売上", "Computed sales"),
-                 T("元資料のPB比率", "Source PB ratio"), T("算出したPB比率", "Computed PB ratio"), T("一致", "Match")]]
-        for _, r in rc.iterrows():
-            rows.append([r.scope, J(r.rep_sales), J(r.calc_sales), _pct(r.rep_ratio, 2), _pct(r.calc_ratio, 2),
-                         T("○" if r.ok else "×", "yes" if r.ok else "NO")])
-        S.append(Spacer(1, 3))
-        S.append(_table(rows, [FW * .24, FW * .19, FW * .19, FW * .13, FW * .15, FW * .1], st))
-
-    # ---- appendix ----
-    S.append(PageBreak())
-    S.append(_p(T("付録A. 使用したルールと基準値", "Appendix A. Rules and thresholds used"), st["h1"]))
-    order_txt = f"{D(RECAPTURE)} {ARROW} {D(REVIEW)} {ARROW} {D(SCALE)} {ARROW} {D(DEFEND)} {ARROW} {D(REPLICATE)} / {D(TEST)} {ARROW} {D(DEPRIORITIZE)} {ARROW} {D(MONITOR)}"
-    S.append(_p(T(f"ルールは次の順に適用し、最初に該当したものを採用します: {order_txt}。基準値は固定の標準値です。",
-                  f"Rules are applied in this order; the first match wins: {order_txt}. Thresholds are fixed standard values."), st["body"]))
-    tt = thresholds_table(res.thresholds, lang)
-    half = (len(tt) + 1) // 2
-    rows = [[T("項目", "Parameter"), T("値", "Value"), T("項目", "Parameter"), T("値", "Value")]]
-    for i in range(half):
-        a = tt[i]
-        b2 = tt[i + half] if i + half < len(tt) else ("", "")
-        rows.append([a[0], a[1], b2[0], b2[1]])
-    S.append(_table(rows, [FW * .32, FW * .18, FW * .32, FW * .18], st))
-    S.append(_p(T("算出方法", "Method notes"), st["h2"]))
-    for line in [
-        T("PB売上 = 全体売上 × PB比率(売上ベース)。非PB売上 = 全体 − PB。PB売れ数 = 全体売れ数 × PB比率(売れ数ベース)。",
-          "PB sales = total sales x PB ratio (sales basis); non-PB sales = total - PB. PB units = total units x PB ratio (units basis)."),
-        T("増減要因: PB売上の増減 =(売上の増減 × 前期PBシェア)+(当期売上 × PBシェアの増減)をサブカテ全体で合計。誤差なしで完全に一致します。",
-          "Growth bridge: change in PB sales = (sales change x prior PB share) + (current sales x PB share change), summed over sub-categories. Exact, no residual."),
-        T("PB比率の要因分解: シェア要因 = 平均売上構成比 × シェア変化。構成要因 = 平均PBシェア × 売上構成比の変化。誤差なしで完全に一致します。",
-          "PB ratio bridge: share effect = average sales weight x share change; mix effect = average PB share x change in sales weight. Exact, no residual."),
-        T("追加SKU当たりPB売上増 = PB売上の増減 ÷ PB SKU数の増減(SKUが増えた場合のみ)。",
-          "Extra PB sales per added SKU = change in PB sales / change in PB SKU count, only where SKUs increased."),
-    ]:
+    # ---- 8. basis of this report ----
+    H1(T("8. 前提・注意事項", "8. Basis and notes"))
+    for line in key_notes(res):
         S.append(Paragraph(escape(line), st["bullet"], bulletText="•"))
 
-    S.append(_p(T("付録B. 全サブカテ一覧", "Appendix B. All sub-categories"), st["h1"]))
+    # ---- appendix: every sub-category ----
+    S.append(PageBreak())
+    S.append(_p(T("付録. 全サブカテ一覧", "Appendix. All sub-categories"), st["h1"]))
     rows = [[T("方向性", "Direction"), sub_h, T(f"売上 {cur}", f"Sales {cur}"), T("非PB", "Non-PB"), T(f"PBシェア {prev}→{cur}", f"PB share {prev}→{cur}"),
              T("市場前年比", "Mkt YoY"), T("PB SKU数", "PB SKUs")]]
     for dname in ORDER:

@@ -20,7 +20,7 @@ from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
 from .analysis import (DEFEND, DEPRIORITIZE, MONITOR, RECAPTURE, REPLICATE, REVIEW, SCALE, TEST, V_SMALL, Result, _jpy,
-                       thresholds_table)
+                       key_notes)
 from .pdf import DIR_BLURB
 
 # palette: deep teal dominant, warm amber as the single sharp accent
@@ -211,7 +211,7 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
     k = res.kpi
     d = res.subs
     prs.core_properties.title = "ペットカテゴリー PB戦略レポート"
-    prs.core_properties.author = "PBレポート自動生成"
+    prs.core_properties.author = "PB戦略レポート"
 
     # ---------------------------------------------------------------- 1. title
     s = prs.slides.add_slide(L_TITLE)
@@ -248,7 +248,7 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
         _text(s, x + 0.2, 5.12, 2.3, 0.3, lab, 12, "D6EBEC")
         _text(s, x + 0.2, 5.42, 2.3, 0.55, val, 28, "FFFFFF", bold=True)
         _text(s, x + 0.2, 5.98, 2.3, 0.3, f"{prev}期比 {chg}", 12, ACCENT, bold=True)
-    _notes(s, f"PB戦略資料(自動生成)。比較期間: {prev}期 vs {cur}期。トライアルの方向性の記載は使用していません。")
+    _notes(s, f"PB戦略資料。比較期間: {prev}期 vs {cur}期。トライアルの方向性の記載は使用していません。")
 
     # ---------------------------------------------------------------- 2. takeaways
     s = prs.slides.add_slide(L_TONLY)
@@ -446,10 +446,8 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
         tops = "、".join(x_df["name"].head(2).tolist()) if len(x_df) else "現在のルールでは該当なし"
         _text(s, x + 0.25, y + 1.78, cw - 0.5, 0.5, "主な対象: " + tops, 10.5, TEXT, bold=True)
     nd, nm = len(res.directions[DEPRIORITIZE]), len(res.directions[MONITOR])
-    nbl = 0 if res.borderline is None else len(res.borderline)
-    _text(s, MX, 6.95, SW - 2 * MX, 0.4, f"このほか、PB未展開で小規模または縮小中の市場が{nd}件({DEPRIORITIZE})、明確なシグナルのないものが{nm}件({MONITOR})。"
-          f"上記の分類のうち{nbl}件は境界線上で、基準値を少し動かすと分類が変わります。", 11, MUTED)
-    _notes(s, f"方向性は明示的なルール(付録参照)で分類しています。{DEPRIORITIZE}: " +
+    _text(s, MX, 6.95, SW - 2 * MX, 0.4, f"このほか、PB未展開で小規模または縮小中の市場が{nd}件({DEPRIORITIZE})、明確なシグナルのないものが{nm}件({MONITOR})。", 11, MUTED)
+    _notes(s, f"方向性はPBシェアの水準・推移と、市場の規模・成長に基づいて分類しています。{DEPRIORITIZE}: " +
            "、".join(res.directions[DEPRIORITIZE]["name"].tolist()))
 
     # ---------------------------------------------------------------- 6-11. one slide per direction
@@ -515,38 +513,14 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
               f"予測ではなく仮定です。{SCALE}: 現在のシェアに直近の上昇幅{t_.upside_scale_momentum_years:g}年分を加算(上限{t_.upside_scale_cap:.0%})。"
               f"{RECAPTURE}: 前期シェアに回復。{REPLICATE}: シェア{t_.upside_replicate_share:.0%}。{TEST}は対象外。"
               "売上はNBから獲得し全体売上は横ばいと仮定。粗利は考慮していません。", 12, MUTED)
-        _notes(s, "計画用の仮定による試算です。基準値は付録に記載しています。")
+        _notes(s, "計画用の仮定による試算です。")
 
-    # ---------------------------------------------------------------- caveats
+    # ---------------------------------------------------------------- basis
     s = prs.slides.add_slide(L_TONLY)
-    _title(s, "会議前に確認すべき注意点")
-    _bullets(s, MX, 1.6, SW - 2 * MX, 5.4, res.caveats, size=16, gap=14, name="Caveats")
-    _notes(s, "\n".join(res.caveats))
-
-    # ---------------------------------------------------------------- data checks
-    s = prs.slides.add_slide(L_TONLY)
-    _title(s, "データチェック: 元資料の合計との照合")
-    if res.recon is not None and len(res.recon):
-        rc = res.recon[res.recon.period == cur]
-        rows = [["区分", f"元資料売上 {cur}", "元資料PB比率", "算出PB比率", "一致"]]
-        for _, r_ in rc.iterrows():
-            rows.append([r_.scope, _jpy(r_.rep_sales), _pct(r_.rep_ratio, 2), _pct(r_.calc_ratio, 2), "○" if r_.ok else "×"])
-        _table(s, rows, [1.5, 1.4, 1.3, 1.2, 0.6], MX, 1.55, row_h=0.45, size=11, right_cols=(1, 2, 3), name="Reconciliation table")
-    msgs = [("要確認: " if sev == "warn" else "") + m for sev, m in res.dq]
-    _bullets(s, 7.05, 1.55, SW - 7.05 - MX, 5.3, msgs, size=11, gap=6, name="Data checks")
-    _notes(s, "\n".join(msgs))
-
-    # ---------------------------------------------------------------- appendix
-    s = prs.slides.add_slide(L_TONLY)
-    _title(s, "付録: ルールと基準値")
-    _text(s, MX, 1.25, SW - 2 * MX, 0.5,
-          f"ルールは次の順に適用し、最初に該当したものを採用: {RECAPTURE}→{REVIEW}→{SCALE}→{DEFEND}→{REPLICATE} / {TEST}→{DEPRIORITIZE}→{MONITOR}。", 12, MUTED)
-    tt = thresholds_table(res.thresholds)
-    half = (len(tt) + 1) // 2
-    for part, chunk in enumerate((tt[:half], tt[half:])):
-        rows = [["項目", "値"]] + [[a, b] for a, b in chunk]
-        _table(s, rows, [3.9, 1.6], MX + part * 6.1, 1.8, row_h=0.33, size=10, right_cols=(1,), name=f"Thresholds {part + 1}")
-    _notes(s, "基準値は固定の標準値です。")
+    _title(s, "前提・注意事項")
+    notes_ = key_notes(res)
+    _bullets(s, MX, 1.6, SW - 2 * MX, 5.4, notes_, size=18, gap=16, name="Notes")
+    _notes(s, "\n".join(notes_))
 
     buf = io.BytesIO()
     prs.save(buf)

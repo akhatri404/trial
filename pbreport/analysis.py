@@ -8,7 +8,7 @@ totals reconcile with the source's own department totals. `reconcile` proves tha
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict, field, replace
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -70,38 +70,6 @@ class Thresholds:
     recon_sales_tolerance: float = 0.002   # reconciliation: allowed relative sales difference
     recon_ratio_tolerance_pt: float = 0.10  # reconciliation: allowed PB-ratio difference in pt
     asp_flag: float = 0.30               # price/mix change (avg yen per unit) that deserves a data check
-
-
-THRESHOLD_LABELS = {
-    "min_headroom": "大規模プールとみなす非PB売上(円)",
-    "scale_share_gain_pt": "拡大: PBシェア上昇幅(pt)",
-    "scale_min_pb_sales": "拡大: 最低PB売上(円)",
-    "scale_min_market_yoy": "拡大: 市場成長率の下限",
-    "white_space_max_share": "PB未展開とみなすPBシェア上限",
-    "test_min_market_yoy": "横展開/テスト: 市場成長率の下限",
-    "recapture_drop_pt": "シェア奪回: PBシェア低下幅(pt)",
-    "recapture_min_prev_pb": "シェア奪回: 前期PB売上の下限(円)",
-    "review_drop_pt": "要点検: PBシェア低下幅(pt)",
-    "review_min_prev_pb": "要点検: 前期PB売上の下限(円)",
-    "defend_min_share": "防衛: PBシェア下限",
-    "defend_min_pb_sales": "防衛: PB売上下限(円)",
-    "deprioritize_max_sales": "優先度低: 売上上限(円)",
-    "deprioritize_market_yoy": "優先度低: 市場成長率(縮小)",
-    "deprioritize_max_growth": "優先度低: 除外する成長率",
-    "sku_growth_flag": "SKU希薄化: SKU増加率",
-    "sku_productivity_drop_flag": "SKU希薄化: SKU当たり売上低下率",
-    "sku_stable_band": "SKU横ばいとみなす変化幅(±)",
-    "min_base_pb_sales": "成長率・判定の最低PB売上(円)",
-    "watch_min_pb_sales": "要注視リスト: 最低PB売上(円)",
-    "watch_min_step_pt": "要注視リスト: 各期の低下幅(pt)",
-    "upside_scale_cap": "試算: 拡大のPBシェア上限",
-    "upside_scale_momentum_years": "試算: 拡大の勢い継続年数",
-    "upside_replicate_share": "試算: 横展開の目標PBシェア",
-    "partial_ratio_tolerance": "途中期の規模の許容差",
-    "recon_sales_tolerance": "照合: 売上の許容差",
-    "recon_ratio_tolerance_pt": "照合: PB比率の許容差(pt)",
-    "asp_flag": "平均単価変動の確認基準",
-}
 
 
 @dataclass
@@ -583,15 +551,25 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
                        f"{r['name']} ({J(r.nb_cur)} non-PB, PB {r.share_cur:.1%})" for _, r in bigs.iterrows()) + "."))
 
     cat_only = SEP.join(data.category_only)
-    scope = T(f"対象: 全{len(d)}サブカテ行" + (f"(「カテゴリー」シートから取り込んだ{len(data.category_only)}カテゴリー: {cat_only}を含む)" if data.category_only else "") + "。",
-              f"Scope: all {len(d)} sub-category rows" + (f", incl. {len(data.category_only)} categories from the category sheet ({cat_only})" if data.category_only else "") + ".")
+    scope = T(f"対象: 全{len(d)}サブカテ" + (f"(カテゴリー単位のみの{cat_only}を含む)" if data.category_only else "") + "。",
+              f"Scope: all {len(d)} sub-categories" + (f" (incl. category-level only: {cat_only})" if data.category_only else "") + ".")
     return Result((prev, cur), latest, data.partial_months, kpi, d, c, directions, flags, up, up_total, cav, t, f,
                   bridge, rankings, watch, conc, recon, dq, bl, scope, lang)
 
 
-def thresholds_table(t: Thresholds, lang: str = "ja"):
-    def fmt(v):
-        if isinstance(v, float) and abs(v) < 100:
-            return f"{v:,.3f}".rstrip("0").rstrip(".") if v != int(v) else f"{v:,.0f}"
-        return f"{v:,.0f}"
-    return [(THRESHOLD_LABELS.get(k, k) if lang == "ja" else k, fmt(v)) for k, v in asdict(t).items()]
+def key_notes(res: Result) -> list:
+    """The few assumptions a reader needs to know. Everything else (data checks, rules) stays off the report."""
+    ja = res.lang == "ja"
+    notes = []
+    if res.period_latest:
+        n = res.partial_months
+        if ja:
+            notes.append(f"{res.period_latest}期は{f'{n}ヶ月分' if n else '途中期'}のため、PB比率とSKU数の参考表示のみで、成長率の算出には使っていません。")
+        else:
+            notes.append(f"{res.period_latest}期 is a partial period" + (f" ({n} months)" if n else "")
+                         + ": it is shown for PB ratio and SKU trends only and is never used for growth rates.")
+    notes.append("粗利・原価のデータは含まれていません。PBシェアが高くても、利益が高いとは限りません。" if ja else
+                 "No margin or cost data is included. A high PB share does not necessarily mean high profit.")
+    notes.append("平均単価の変化には、価格・容量・商品構成の変化が含まれます。数量に関する記述は参考値です。" if ja else
+                 "Average price per unit reflects price, pack-size and product-mix changes, so statements about volume are indicative.")
+    return notes
