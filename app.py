@@ -2,9 +2,16 @@
 
 Run locally:  streamlit run app.py
 """
+import hashlib
+from pathlib import Path
+
 import streamlit as st
 
 from pbreport import FORMATS, Thresholds, WorkbookError, analyze, generate_report, load_workbook_data
+
+# st.cache_data only hashes build()'s own source, not the pbreport package it calls, so without this a redeploy
+# keeps serving reports made by the old code for a file uploaded before.
+CODE_VERSION = hashlib.sha256(b"".join(p.read_bytes() for p in sorted((Path(__file__).parent / "pbreport").glob("*.py")))).hexdigest()
 
 st.set_page_config(page_title="PB戦略レポート", page_icon="📄", layout="centered")
 st.title("PB戦略レポート")
@@ -14,7 +21,7 @@ FORMAT_LABELS = {"pdf": "PDF (日本語)", "pdf_en": "PDF (English)", "pptx": "P
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def build(file_bytes: bytes, name: str, fmt: str):
+def build(file_bytes: bytes, name: str, fmt: str, code_version: str):
     """Cached so switching format or re-running does not repeat work for the same file."""
     import io
     blob, res = generate_report(io.BytesIO(file_bytes), Thresholds(), source_name=name, fmt=fmt)
@@ -33,7 +40,7 @@ fmt = next(k for k, v in FORMAT_LABELS.items() if v == fmt_label)
 if up is not None:
     try:
         with st.spinner(f"分析して{FORMAT_LABELS[fmt]}レポートを作成しています…"):
-            blob, caveats, dq, recon_ok = build(up.getvalue(), up.name, fmt)
+            blob, caveats, dq, recon_ok = build(up.getvalue(), up.name, fmt, CODE_VERSION)
     except WorkbookError as e:
         st.error(f"このファイルは処理できませんでした: {e}")
         st.stop()
