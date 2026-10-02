@@ -13,7 +13,7 @@ Upload the pet-category Excel workbook (the one with the 「サブカテ」 shee
    * **Direction rules** (拡大 Scale / 横展開 Replicate / シェア奪回 Recapture / 小規模テスト Test small / 要点検 Review / 防衛 Defend / 優先度低 Deprioritize / 経過観察 Monitor), and an illustrative upside. Data checks (reconciliation with the source totals) and detailed caveats are shown on the app page, not in the report; the report carries only a short 前提・注意事項 box.
 3. Builds the report in the chosen format:
    * **PDF** (`pbreport/pdf.py`): about 9 pages with an embedded Japanese font; one page per department lists every sub-category.
-   * **PowerPoint** (`pbreport/pptx_report.py`): 16-slide 16:9 deck with real slide titles, *native* charts and tables (editable in PowerPoint), speaker notes on every slide, Calibri / Yu Gothic fonts.
+   * **PowerPoint** (`pbreport/pptx_report.py`): 17-slide 16:9 deck with real slide titles, *native* charts and tables (editable in PowerPoint), speaker notes on every slide, Calibri / Yu Gothic fonts.
 
 The PDF (日本語), PowerPoint, app screen and error messages are in Japanese; an English PDF (`-f pdf_en`) is also available (category names and other Excel labels stay Japanese); amounts use 億円 / 万円. The analysis is deterministic: the same file always gives the same report. トライアル direction markers and the 過去資料 sheet are ignored.
 
@@ -38,8 +38,7 @@ python -m pbreport --watch inbox/ reports/ -f both   # drop an .xlsx in inbox/, 
 
 ## Expected layout
 Sheet name contains 「サブカテ」; a header row with 部門 / カテゴリ / サブカテ and, for each period, columns named like
-`25/6期 全体売上`, `全体売れ数`, `PB比率(売上)`, `PB比率(売れ数)`, `PB SKU数`. Two or more periods; if the last period is partial
-(a 「※Nヶ月分」 note on the 「方向性」 sheet, or sales under 60% of the previous period) it is used only for PB-ratio trend.
+`25/6期 全体売上`, `全体売れ数`, `PB比率(売上)`, `PB比率(売れ数)`, `PB SKU数`. Two or more periods. If the newest period covers clearly less than the others (a 「※Nヶ月分」 note on the 「方向性」 sheet, or sales under 60% of the previous period), growth, the bridge and the directions use the last two comparable periods. The newest period is shown next to them as it is: PB ratio and PB SKU count are compared, sales and PB sales are shown but their change is not. Nothing is scaled up and no number of months is assumed or printed.
 
 ## Changing the rules
 All thresholds are fixed defaults in `Thresholds` (`pbreport/analysis.py`); they are not shown in the report. Fonts: bundled IPAex Gothic (see `fonts/`, IPA Font License);

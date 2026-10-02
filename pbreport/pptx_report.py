@@ -20,7 +20,7 @@ from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
 from .analysis import (DEFEND, DEPRIORITIZE, MONITOR, RECAPTURE, REPLICATE, REVIEW, SCALE, TEST, V_SMALL, Result, _jpy,
-                       ORDER, key_notes)
+                       ORDER, T_DOWN, T_FLAT, T_UP, key_notes)
 from .pdf import DIR_BLURB
 
 # palette: deep teal dominant, warm amber as the single sharp accent
@@ -200,6 +200,10 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
     prs.slide_width, prs.slide_height = Inches(SW), Inches(SH)
     L_TITLE, L_TONLY = prs.slide_layouts[0], prs.slide_layouts[5]
     prev, cur = res.periods_full
+    LAT = res.period_latest                      # the newest period, when it covers less than the others: shown alongside, not compared in yen
+    LATH = f"{LAT}期*" if LAT else ""
+    LATNOTE = (f"* {LAT}期は他の期より対象期間が短く(売上は{cur}期の{res.kpi['sales_latest'] / res.kpi['sales_cur']:.0%})、"
+               "売上・PB売上は他の期と比べられないため、増減は表示していません。PB比率とPB SKU数は並べて比較できます。") if LAT else ""
     k = res.kpi
     d = res.subs
     prs.core_properties.title = "ペットカテゴリー PB戦略レポート"
@@ -223,7 +227,7 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
     sp = sub.text_frame.paragraphs[0]
     sp.alignment = PP_ALIGN.LEFT
     r = sp.add_run()
-    extra = f"  |  PB比率の推移は{res.period_latest}期も表示" if res.period_latest else ""
+    extra = f"  |  {LAT}期も並べて表示" if LAT else ""
     r.text = f"{prev}期 vs {cur}期{extra}"
     _style(r, 20, "BFD9DA")
     sp2 = sub.text_frame.add_paragraph()
@@ -239,18 +243,7 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
     share_net = top_cat.d_pb / k["d_pb"] if k["d_pb"] > 0 else None
     _title(s, f"PB成長の{share_net:.0%}を{top_cat['cat']}が牽引" if share_net and share_net > 0.3
            else "PB実績の概要")
-    cards = [("PB売上", _jpy(k["pb_cur"]), f"{prev}期比 {_spct(k['pb_yoy'])}({_jpy(k['d_pb'])})"),
-             ("PB比率(売上)", _pct(k["share_cur"]), f"{prev}期比 {(k['share_cur'] - k['share_prev']) * 100:+.2f}pt"),
-             ("PB SKU当たりPB売上", _jpy(k["per_sku_cur"]), f"{prev}期比 {_spct(k['per_sku_chg'], 0)}(SKU数 {_spct(k['sku_growth'], 0)})")]
-    cw = (SW - 2 * MX - 0.5) / 3
-    for i, (lab, val, chg) in enumerate(cards):
-        x = MX + i * (cw + 0.25)
-        _box(s, x, 1.55, cw, 1.75, name=f"Stat card {i + 1}")
-        _text(s, x + 0.25, 1.72, cw - 0.5, 0.3, lab, 13, MUTED)
-        _text(s, x + 0.25, 2.05, cw - 0.5, 0.7, val, 36, DARK, bold=True)
-        bad = i == 2 and (k["per_sku_chg"] or 0) < 0
-        _text(s, x + 0.25, 2.8, cw - 0.5, 0.35, chg, 12, RED if bad else TEAL, bold=True)
-    _bullets(s, MX, 3.6, SW - 2 * MX, 3.6, res.findings, size=16, gap=14, name="Findings")
+    _bullets(s, MX, 1.7, SW - 2 * MX, 5.2, res.findings, size=20, gap=22, name="Findings")
     _notes(s, "\n".join(res.findings))
 
     # ---------------------------------------------------------------- 2b. growth bridge
@@ -320,9 +313,36 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
     dp = res.depts
     s = prs.slides.add_slide(L_TONLY)
     _title(s, "部門別の売上とPB比率")
-    _text(s, MX, 1.28, 5.2, 0.25, f"PB比率 {cur}期(%)", 11, MUTED)
-    _bar_chart(s, [r["dept"] for _, r in dp.iterrows()], [round(r.share_cur * 100, 1) for _, r in dp.iterrows()], [TEAL] * len(dp),
-               MX, 1.55, 5.2, 3.6, "PB ratio by department chart", size=12, label_fmt='0.0"%"')
+    _text(s, MX, 1.28, 5.2, 0.25, "PB比率の推移(%)", 11, MUTED)
+    cd = CategoryChartData()
+    cd.categories = [r["dept"] for _, r in dp.iterrows()]
+    cd.add_series(f"{prev}期", [round(float(v) * 100, 1) for v in dp.share_prev])
+    cd.add_series(f"{cur}期", [round(float(v) * 100, 1) for v in dp.share_cur])
+    if LAT:
+        cd.add_series(LATH, [round(float(v) * 100, 1) for v in dp.share_latest])
+    gf = s.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, Inches(MX), Inches(1.55), Inches(5.2), Inches(3.9), cd)
+    gf.name = "PB ratio by department chart"
+    ch = gf.chart
+    ch.has_title = False
+    ch.has_legend = True
+    ch.legend.position, ch.legend.include_in_layout = XL_LEGEND_POSITION.BOTTOM, False
+    ch.legend.font.size = Pt(11)
+    ch.font.size, ch.font.name = Pt(11), LATIN
+    pl = ch.plots[0]
+    pl.gap_width, pl.overlap = 50, -5
+    pl.has_data_labels = True
+    pl.data_labels.number_format, pl.data_labels.number_format_is_linked = '0.0"%"', False
+    pl.data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
+    pl.data_labels.font.size = Pt(9)
+    for ser, col in zip(pl.series, ("B8C9CA", TEAL, ACCENT)):
+        ser.invert_if_negative = False
+        ser.format.fill.solid()
+        ser.format.fill.fore_color.rgb = _rgb(col)
+    ch.value_axis.visible = False
+    ch.value_axis.has_major_gridlines = False
+    ch.category_axis.reverse_order = True
+    ch.category_axis.format.line.fill.background()
+    ch.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
     rows = [["部門", "売上", "市場前年比", "PB売上", "PB比率 前期→当期", "PB SKU数"]]
     for _, r_ in dp.iterrows():
         rows.append([r_["dept"], _jpy(r_.sales), _spct(r_.yoy), _jpy(r_.pb_cur), f"{_pct(r_.share_prev)}→{_pct(r_.share_cur)}",
@@ -332,7 +352,24 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
     _table(s, rows, [1.6, 0.95, 0.85, 0.95, 1.35, 0.95], 6.05, 1.55, row_h=0.5, size=11, right_cols=(1, 2, 3, 5), name="Department table")
     _text(s, MX, 5.5, SW - 2 * MX, 0.9, f"ペット全体のPB比率{_pct(k['share_cur'])}は、PB比率の大きく異なる部門の平均です。"
           "部門ごとに状況が違うため、次のスライド以降は部門別に見ていきます。", 13, MUTED)
+    if LAT:
+        _text(s, MX, 6.45, SW - 2 * MX, 0.6, LATNOTE, 10, MUTED)
     _notes(s, "部門別のPB比率: " + "、".join(f"{r_['dept']} {_pct(r_.share_cur)}" for _, r_ in dp.iterrows()))
+
+    if LAT:
+        s = prs.slides.add_slide(L_TONLY)
+        _title(s, "3期の推移(部門別)")
+        rows = [["部門", f"PB売上 {prev}", f"PB売上 {cur}", f"PB売上 {LATH}", f"PB比率 {prev}", f"PB比率 {cur}", f"PB比率 {LATH}",
+                 f"PB SKU数 {prev}", f"PB SKU数 {cur}", f"PB SKU数 {LATH}"]]
+        for _, r_ in dp.iterrows():
+            rows.append([r_["dept"], _jpy(r_.pb_prev), _jpy(r_.pb_cur), _jpy(r_.pb_latest), _pct(r_.share_prev), _pct(r_.share_cur), _pct(r_.share_latest),
+                         f"{r_.sku_prev:.0f}", f"{r_.sku_cur:.0f}", f"{r_.sku_latest:.0f}"])
+        rows.append(["ペット計", _jpy(k["pb_prev"]), _jpy(k["pb_cur"]), _jpy(k["pb_latest"]), _pct(k["share_prev"]), _pct(k["share_cur"]), _pct(k["share_latest"]),
+                     f"{k['sku_prev']:.0f}", f"{k['sku_cur']:.0f}", f"{k['sku_latest']:.0f}"])
+        w_ = [1.9, 1.15, 1.15, 1.25, 1.0, 1.0, 1.1, 1.15, 1.15, 1.25]
+        _table(s, rows, w_, MX, 1.55, row_h=0.6, size=10.5, right_cols=tuple(range(1, len(w_))), name="Three-period table")
+        _text(s, MX, 1.55 + 0.6 * len(rows) + 0.3, SW - 2 * MX, 0.8, LATNOTE, 11, MUTED)
+        _notes(s, LATNOTE + f" {LAT}期: 売上 {_jpy(k['sales_latest'])}、PB売上 {_jpy(k['pb_latest'])}。")
 
     s = prs.slides.add_slide(L_TONLY)
     _title(s, "PB売上とPB比率の増減要因(部門別)")
@@ -421,24 +458,35 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
         s = prs.slides.add_slide(L_TONLY)
         _title(s, f"{dept}: PB売上 {_jpy(dr.pb_cur)}({_spct(dr.pb_growth, 0)})、PB比率 {_pct(dr.share_cur)}")
         fl = res.dept_findings.get(dept, [])
-        rows = [["カテゴリー", "PB売上(部門内順位)", "PBシェア(増減pt)", "PB成長率", "市場成長率", "PB SKU数", "SKU当たりPB売上", "判定"]]
+        rows = [["カテゴリー", "PB売上(部門内順位)", "PBシェア(増減pt)", "PB成長率", "市場成長率", "PB SKU数", "SKU当たりPB売上", "判定"]
+                + ([f"{LATH} PBシェア/SKU数"] if LAT else [])]
         for _, r_ in res.cats[res.cats["dept"] == dept].sort_values("pb_cur", ascending=False).iterrows():
             rows.append([r_["cat"], f"{_jpy(r_.pb_cur)}({r_.rank_dept}位)", f"{_pct(r_.share_cur)}({r_.d_share_pt:+.1f})", _spct(r_.pb_growth, 0), _spct(r_.yoy),
-                         f"{r_.sku_prev:.0f}→{r_.sku_cur:.0f}({_spct(r_.sku_growth, 0)})", f"{_jpy(r_.per_sku_cur)}({_spct(r_.per_sku_chg, 0)})", r_.verdict])
-        _table(s, rows, [1.5, 1.55, 1.55, 0.95, 1.05, 1.75, 1.7, 2.1], MX, 1.5, row_h=0.34, size=10, right_cols=(3, 4), name="Category table")
+                         f"{r_.sku_prev:.0f}→{r_.sku_cur:.0f}({_spct(r_.sku_growth, 0)})", f"{_jpy(r_.per_sku_cur)}({_spct(r_.per_sku_chg, 0)})", r_.verdict]
+                        + ([f"{_pct(r_.share_latest)}/{r_.sku_latest:.0f}"] if LAT else []))
+        cw_ = [1.35, 1.4, 1.4, 0.85, 0.95, 1.5, 1.5, 1.85, 1.3] if LAT else [1.5, 1.55, 1.55, 0.95, 1.05, 1.75, 1.7, 2.1]
+        _table(s, rows, cw_, MX, 1.5, row_h=0.34, size=10, right_cols=(3, 4), name="Category table")
         y2 = 1.5 + 0.34 * len(rows) + 0.3
         sd = res.subs[res.subs["dept"] == dept].copy()
         sd["_o"] = sd["direction"].map(rank_dir)
         sd = sd.sort_values(["_o", "nb_cur"], ascending=[True, False])
         n_show = max(3, int((SH - 0.55 - y2) / 0.32) - 1)
         show = sd.head(n_show)
-        rows = [["サブカテ", "市場前年比", "非PB売上", f"PBシェア {prev}→{cur}", "PB売上", "PB成長率", "PB SKU数", "方向性"]]
+        rows = [["サブカテ", "市場前年比", "非PB売上", f"PBシェア {prev}→{cur}" + (f"→{LATH}" if LAT else ""), "PB売上"]
+                + ["PB成長率", "PB SKU数"] + (["シェア動向"] if LAT else []) + ["方向性"]]
         for _, r_ in show.iterrows():
-            rows.append([r_["name"], _spct(r_.yoy), _jpy(r_.nb_cur), f"{r_.share_prev * 100:.1f}%→{r_.share_cur * 100:.1f}%", _jpy(r_.pb_cur),
-                         _spct(r_.pb_growth, 0), f"{r_.sku_prev:.0f}→{r_.sku_cur:.0f}", r_.direction])
-        _table(s, rows, [3.3, 1.0, 1.2, 2.0, 1.2, 0.95, 0.95, 1.5], MX, y2, row_h=0.32, size=10, right_cols=(1, 2, 4, 5), name="Sub-category table")
+            sku3 = f"{r_.sku_prev:.0f}→{r_.sku_cur:.0f}" + (f"→{r_.sku_latest:.0f}" if LAT else "")
+            lat_ = f"→{r_.share_latest * 100:.1f}%" if LAT and r_.share_latest == r_.share_latest else ""
+            trend_ = (f"{ {T_UP: '↑', T_FLAT: '→', T_DOWN: '↓'}[r_.trend] } {r_.mom_pt:+.1f}pt" if r_.trend else "－") if LAT else ""
+            rows.append([r_["name"], _spct(r_.yoy), _jpy(r_.nb_cur), f"{r_.share_prev * 100:.1f}%→{r_.share_cur * 100:.1f}%{lat_}", _jpy(r_.pb_cur)]
+                        + [_spct(r_.pb_growth, 0), sku3] + ([trend_] if LAT else []) + [r_.direction])
+        sw_ = [2.9, 0.9, 1.1, 1.8, 1.05, 0.85, 0.95, 1.2, 1.35] if LAT else [3.3, 1.0, 1.2, 2.0, 1.2, 0.95, 0.95, 1.5]
+        _table(s, rows, sw_, MX, y2, row_h=0.32, size=10, right_cols=(1, 2, 4, 5), name="Sub-category table")
         if len(sd) > len(show):
-            _text(s, MX, SH - 0.45, 8, 0.28, f"ほか{len(sd) - len(show)}件(PDFレポート参照)", 11, MUTED)
+            _text(s, MX, SH - 0.45, 5, 0.28, f"ほか{len(sd) - len(show)}件(PDFレポート参照)", 11, MUTED)
+        if LAT:
+            _text(s, MX + (3.2 if len(sd) > len(show) else 0), SH - 0.5, 9.0, 0.4,
+                  LATNOTE + f" シェア動向は{LAT}期と{cur}期のPBシェア差(±{res.thresholds.momentum_pt:g}pt以上で上昇・低下)。", 8.5, MUTED)
         _notes(s, "\n".join(fl))
 
     # ---------------------------------------------------------------- upside

@@ -24,6 +24,7 @@ V_EFFICIENT, V_SKULED, V_SKUDOWNSALES = "売上がSKU増に追随", "SKU増が�
 V_PRUNED, V_SHRINK = "SKU削減・売上増", "SKU削減・売上減"
 V_STABLE_UP, V_STABLE_DOWN = "SKU横ばい・売上増", "SKU横ばい・売上減"
 V_NEW, V_EXIT, V_SMALL = "PB新規投入", "PB撤退", "小規模(判定外)"
+T_UP, T_FLAT, T_DOWN = "上昇", "横ばい", "低下"      # PB share trend: newest (part-year) period vs the last full period
 
 # Internal keys stay Japanese; `tr` translates them for display only.
 _EN = {
@@ -32,6 +33,7 @@ _EN = {
     V_EFFICIENT: "Sales keep pace with SKUs", V_SKULED: "SKUs outpace sales", V_SKUDOWNSALES: "SKUs up, sales down",
     V_PRUNED: "Pruned, sales up", V_SHRINK: "Shrinking", V_STABLE_UP: "Stable range, sales up",
     V_STABLE_DOWN: "Stable range, sales down", V_NEW: "New PB range", V_EXIT: "PB range exited", V_SMALL: "Small base",
+    T_UP: "Rising", T_FLAT: "Flat", T_DOWN: "Falling",
 }
 
 
@@ -66,10 +68,10 @@ class Thresholds:
     upside_scale_cap: float = 0.70       # max PB share assumed for Scale items
     upside_scale_momentum_years: float = 2.0
     upside_replicate_share: float = 0.10  # PB share assumed for Replicate items
-    partial_ratio_tolerance: float = 0.05  # allowed gap between expected and actual partial-period size
     recon_sales_tolerance: float = 0.002   # reconciliation: allowed relative sales difference
     recon_ratio_tolerance_pt: float = 0.10  # reconciliation: allowed PB-ratio difference in pt
     asp_flag: float = 0.30               # price/mix change (avg yen per unit) that deserves a data check
+    momentum_pt: float = 2.0             # PB share move (pt), newest part-year period vs last full period, that counts as rising / falling
 
 
 @dataclass
@@ -228,6 +230,12 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
     d["price_idx"] = _div(_div(d.pb_cur, d.pb_units), _div(d.nb_cur, nb_units))   # PB avg yen/unit vs non-PB
     d["sku_prev"], d["sku_cur"] = df[f"pb_skus_{prev}"], df[f"pb_skus_{cur}"]
     d["sku_latest"] = df[f"pb_skus_{latest}"] if latest else np.nan
+    d["sales_latest"] = df[f"sales_{latest}"] if latest else np.nan
+    d["pb_latest"] = df[f"pb_sales_{latest}"] if latest else np.nan
+    d["mom_pt"] = ((d.share_latest - d.share_cur) * 100).round(1)         # PB share move in points (rounded as shown), newest vs last full period
+    sized = d.pb_cur >= t.min_base_pb_sales                               # tiny bases are not tagged
+    d["trend"] = np.where(~sized | d.mom_pt.isna(), "",
+                          np.where(d.mom_pt >= t.momentum_pt, T_UP, np.where(d.mom_pt <= -t.momentum_pt, T_DOWN, T_FLAT)))
     d["sku_growth"] = _div(d.sku_cur - d.sku_prev, d.sku_prev)
     d["per_sku_prev"], d["per_sku_cur"] = _div(d.pb_prev, d.sku_prev), _div(d.pb_cur, d.sku_cur)
     d["per_sku_chg"] = _div(d.per_sku_cur - d.per_sku_prev, d.per_sku_prev)
@@ -262,10 +270,10 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
                sku_prev=("sku_prev", "sum"), sku_cur=("sku_cur", "sum"), market_eff=("market_eff", "sum"),
                share_eff=("share_eff", "sum"), rate_pt=("rate_pt", "sum"), mix_pt=("mix_pt", "sum"),
                units=("units", "sum"), units_prev=("units_prev", "sum"))
-    if latest:
-        agg["sku_latest"] = ("sku_latest", "sum")
+    agg.update(sku_latest=("sku_latest", "sum"), sales_latest=("sales_latest", "sum"), pb_latest=("pb_latest", "sum"))
     c = d.groupby(["dept", "cat"], as_index=False).agg(**agg)
     c["share_prev"], c["share_cur"] = _div(c.pb_prev, c.sales_prev), _div(c.pb_cur, c.sales)
+    c["share_latest"] = _div(c.pb_latest, c.sales_latest)
     c["yoy"] = _div(c.sales - c.sales_prev, c.sales_prev)
     c["units_yoy"] = _div(c.units - c.units_prev, c.units_prev)
     c["pb_growth"] = _div(c.pb_cur - c.pb_prev, c.pb_prev)
@@ -291,12 +299,15 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
         cats=("cat", "nunique"), subs=("sub", "count"), sales=("sales", "sum"), sales_prev=("sales_prev", "sum"),
         pb_cur=("pb_cur", "sum"), pb_prev=("pb_prev", "sum"), nb_cur=("nb_cur", "sum"),
         sku_prev=("sku_prev", "sum"), sku_cur=("sku_cur", "sum"), market_eff=("market_eff", "sum"),
-        share_eff=("share_eff", "sum"), rate_pt=("rate_pt", "sum"), mix_pt=("mix_c_pt", "sum"))
+        share_eff=("share_eff", "sum"), rate_pt=("rate_pt", "sum"), mix_pt=("mix_c_pt", "sum"),
+        sku_latest=("sku_latest", "sum"), sales_latest=("sales_latest", "sum"), pb_latest=("pb_latest", "sum"))
     dp["share_prev"], dp["share_cur"] = _div(dp.pb_prev, dp.sales_prev), _div(dp.pb_cur, dp.sales)
     dp["yoy"] = _div(dp.sales - dp.sales_prev, dp.sales_prev)
     dp["d_pb"] = dp.pb_cur - dp.pb_prev
     dp["pb_growth"] = _div(dp.d_pb, dp.pb_prev)
     dp["d_share_pt"] = (dp.share_cur - dp.share_prev) * 100
+    dp["share_latest"] = _div(dp.pb_latest, dp.sales_latest)
+    dp["per_sku_latest"] = _div(dp.pb_latest, dp.sku_latest)
     dp["sku_growth"] = _div(dp.sku_cur - dp.sku_prev, dp.sku_prev)
     dp["per_sku_prev"], dp["per_sku_cur"] = _div(dp.pb_prev, dp.sku_prev), _div(dp.pb_cur, dp.sku_cur)
     dp["per_sku_chg"] = _div(dp.per_sku_cur - dp.per_sku_prev, dp.per_sku_prev)
@@ -327,6 +338,9 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
         kpi["share_latest"] = df[f"pb_sales_{latest}"].sum() / sl if sl else np.nan
         kpi["sales_latest"] = sl
         kpi["sku_latest"] = d.sku_latest.sum()
+        kpi["pb_latest"] = float(df[f"pb_sales_{latest}"].sum())
+        kpi["nb_latest"] = float(sl - kpi["pb_latest"])
+        kpi["per_sku_latest"] = kpi["pb_latest"] / kpi["sku_latest"] if kpi["sku_latest"] else np.nan
 
     # ---- concentration -----------------------------------------------------------------------------------
     pbs = d.sort_values("pb_cur", ascending=False)
@@ -489,25 +503,12 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
     if latest:
         sl = kpi["sales_latest"]
         actual = sl / S1 if S1 else float("nan")
-        if data.partial_months:
-            exp = data.partial_months / 12
-            note = T(f"{latest}期は{data.partial_months}ヶ月分とされていますが、売上は{cur}期通期の{actual:.0%}です"
-                     f"({data.partial_months}ヶ月分なら約{exp:.0%})。",
-                     f"The {latest} period is marked as {data.partial_months} months, but its sales are "
-                     f"{actual:.0%} of the {cur} full year; {data.partial_months} months would be about {exp:.0%}.")
-            if abs(actual - exp) > t.partial_ratio_tolerance:
-                cav.append(note + T("対象月数が多いか季節性が強い可能性があるため、期間を確認してください。"
-                                    f"{latest}期はPB比率とSKU数のみに使用し、成長率には使用していません。",
-                                    " It may cover more months or be strongly seasonal, so confirm the period. "
-                                    f"{latest} is used only for PB ratios and SKU counts, never for growth."))
-            else:
-                cav.append(T(f"{latest}期は{data.partial_months}ヶ月分のため、PB比率とSKU数のみに使用し、成長率には使用していません。",
-                             f"The {latest} period covers {data.partial_months} months and is used only for PB ratios and SKU counts, never for growth."))
-        else:
-            cav.append(T(f"{latest}期は途中期と判断しました(売上が{cur}期の{actual:.0%})。PB比率とSKU数のみに使用しています。",
-                         f"The {latest} period looks partial (sales are {actual:.0%} of {cur}) and is used only for PB ratios and SKU counts."))
-        cav.append(T(f"途中期のPBシェアは年間の一部の期間のみを対象とするため(季節性)、{latest}期と{cur}期のシェア比較は参考値であり、同条件の比較ではありません。",
-                     f"PB share in a partial period covers a different part of the year (seasonality), so {latest} vs {cur} share changes are indicative, not like-for-like."))
+        cav.append(T(f"{latest}期は他の期より対象期間が短く、売上は{cur}期の{actual:.0%}です。売上・PB売上は他の期と比べられないため、"
+                     f"増減額・成長率・増減要因・方向性の分析には使わず、PB比率・SKU数・シェア動向を{cur}期と並べて表示しています。",
+                     f"The {latest} period covers a shorter span than the others (its sales are {actual:.0%} of {cur}期). Sales and PB sales cannot be compared "
+                     f"with the other periods, so it is not used for changes, growth, drivers or directions; PB ratio, SKU counts and share trend are shown next to {cur}期."))
+        cav.append(T(f"対象期間の異なる期のPBシェアは季節性の影響を受けるため、{latest}期と{cur}期のシェア比較は参考値です。",
+                     f"PB share over a different span is affected by seasonality, so {latest} vs {cur}期 share changes are indicative, not like-for-like."))
     cav += [
         T("粗利・原価のデータはありません。本資料はすべて売上シェアに基づくため、PBシェアが高くても利益が高いとは限りません。",
           "There is no margin or cost data. Everything here is sales share, so a high PB share is not necessarily high profit."),
@@ -566,6 +567,30 @@ def analyze(data: WorkbookData, t: Thresholds | None = None, lang: str = "ja") -
             pe.append(f"largest decline {l_['name']} ({J(l_.d_pb)})")
         if pj:
             fl.append(T("PB売上の動き: " + "、".join(pj) + "です。", "PB sales by sub-category: " + "; ".join(pe) + "."))
+        if latest and pd.notna(dr.share_latest):
+            dpt = (dr.share_latest - dr.share_cur) * 100
+            fl.append(T(f"{latest}期: PB売上 {J(dr.pb_latest)}、PB比率 {PC(dr.share_latest)}({cur}期比 {dpt:+.2f}pt)。"
+                        f"{latest}期は他の期より対象期間が短いため、売上の増減は比較していません。",
+                        f"{latest}期: PB sales {J(dr.pb_latest)}, PB ratio {PC(dr.share_latest)} ({dpt:+.2f} pt vs {cur}期). "
+                        f"It covers a shorter span than the other periods, so changes in sales are not compared."))
+        tg = sub_d[sub_d["trend"] != ""] if latest else sub_d.iloc[0:0]
+        if len(tg):
+            ups = tg[tg.trend == T_UP].sort_values("mom_pt", ascending=False).head(2)
+            downs = tg[tg.trend == T_DOWN].sort_values("mom_pt").head(2)
+            mj, me = [], []
+            if len(ups):
+                mj.append("上昇 " + "、".join(f"{r['name']}({r.mom_pt:+.1f}pt)" for _, r in ups.iterrows()))
+                me.append("rising: " + ", ".join(f"{r['name']} ({r.mom_pt:+.1f} pt)" for _, r in ups.iterrows()))
+            if len(downs):
+                mj.append("低下 " + "、".join(f"{r['name']}({r.mom_pt:+.1f}pt)" for _, r in downs.iterrows()))
+                me.append("falling: " + ", ".join(f"{r['name']} ({r.mom_pt:+.1f} pt)" for _, r in downs.iterrows()))
+            if mj:
+                fl.append(T(f"PBシェアの最新の動き({latest}期、{cur}期比): " + " / ".join(mj) + "。",
+                            f"PB share momentum ({latest}期 vs {cur}期): " + "; ".join(me) + "."))
+            warn = tg[(tg.direction == SCALE) & (tg.trend == T_DOWN)]
+            if len(warn):
+                fl.append(T(f"要注意: 「{SCALE}」の対象ですが、直近のPBシェアが低下しています: " + "、".join(warn["name"]) + "。",
+                            f"Watch: classified as {tr(SCALE, 'en')}, but PB share has slipped recently: " + ", ".join(warn["name"]) + "."))
         pool_ = sub_d.sort_values("nb_cur", ascending=False).iloc[0]
         if pool_.nb_cur > 0:
             fl.append(T(f"非PB売上が最も大きいのは{pool_['name']}({J(pool_.nb_cur)}、PB比率{PC(pool_.share_cur)})です。",
@@ -593,12 +618,12 @@ def key_notes(res: Result) -> list:
     ja = res.lang == "ja"
     notes = []
     if res.period_latest:
-        n = res.partial_months
-        if ja:
-            notes.append(f"{res.period_latest}期は{f'{n}ヶ月分' if n else '途中期'}のため、PB比率とSKU数の参考表示のみで、成長率の算出には使っていません。")
-        else:
-            notes.append(f"{res.period_latest}期 is a partial period" + (f" ({n} months)" if n else "")
-                         + ": it is shown for PB ratio and SKU trends only and is never used for growth rates.")
+        cf = res.periods_full[1]
+        sh_ = res.kpi["sales_latest"] / res.kpi["sales_cur"] if res.kpi["sales_cur"] else float("nan")
+        notes.append(f"{res.period_latest}期は他の期より対象期間が短く(売上は{cf}期の{sh_:.0%})、売上・PB売上は他の期と比べられません。"
+                     f"PB比率・SKU数・シェア動向のみ{cf}期と並べて表示しており、成長率や方向性の判定には使っていません。" if ja else
+                     f"{res.period_latest}期 covers a shorter span than the others (its sales are {sh_:.0%} of {cf}期), so sales and PB sales cannot be compared with the other periods. "
+                     f"Only PB ratio, SKU counts and share trend are shown next to {cf}期; it is not used for growth or directions.")
     notes.append("粗利・原価のデータは含まれていません。PBシェアが高くても、利益が高いとは限りません。" if ja else
                  "No margin or cost data is included. A high PB share does not necessarily mean high profit.")
     notes.append("平均単価の変化には、価格・容量・商品構成の変化が含まれます。数量に関する記述は参考値です。" if ja else
