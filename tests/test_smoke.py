@@ -82,10 +82,8 @@ def test_two_period_minimal_workbook_all_formats():
     assert pdf[:4] == b"%PDF" and res.period_latest is None
     prs_bytes, _ = generate_report(_mini_workbook(), fmt="pptx")
     assert len(Presentation(io.BytesIO(prs_bytes)).slides) >= 8
-    # bridge identities hold exactly
-    b = res.bridge
-    assert abs(b["market"] + b["share"] - b["d_pb"]) < 1
-    assert abs(b["rate_pt"] + b["mix_pt"] - b["d_ratio_pt"]) < 1e-6
+    # PB sales are never derived (sales x PB ratio): no such column exists anywhere in the result
+    assert not [c for c in list(res.subs.columns) + list(res.cats.columns) + list(res.depts.columns) if c.startswith(("pb_", "nb_", "d_pb"))]
 
 
 @pytest.mark.skipif(not SAMPLE or not os.path.exists(SAMPLE or ""), reason="PB_SAMPLE not set")
@@ -110,21 +108,55 @@ def test_english_pdf_has_no_japanese_report_text():
 
 def test_department_view_adds_up_to_the_company_total():
     _, res = generate_report(_mini_workbook(), fmt="pdf")
-    dp, b = res.depts, res.bridge
+    dp, k = res.depts, res.kpi
     assert set(dp["dept"]) == {"A", "B"}
-    assert abs(dp.pb_cur.sum() - b["pb_cur"]) < 1
-    assert abs(dp.market_eff.sum() - b["market"]) < 1 and abs(dp.share_eff.sum() - b["share"]) < 1
-    assert abs(dp.rate_pt.sum() - b["rate_pt"]) < 1e-6 and abs(dp.mix_pt.sum() - b["mix_pt"]) < 1e-6
+    assert abs(dp.sales.sum() - k["sales_cur"]) < 1 and abs(dp.sku_cur.sum() - k["sku_cur"]) < 1
     assert all(res.dept_findings[d] for d in dp["dept"])
+
+
+def _workbook_with_own_totals():
+    """_mini_workbook plus 方向性 / カテゴリー sheets whose PB ratios deliberately differ from any weighted average."""
+    import openpyxl
+    wb = openpyxl.load_workbook(_mini_workbook())
+    per = lambda: [h for p in ("25/6", "26/6") for h in (f"{p}期\n全体売上", f"{p}期\n全体売れ数", f"{p}期\nPB比率\n(売上)", f"{p}期\nPB比率\n(売れ数)")]
+    ws = wb.create_sheet("方向性")
+    ws.append([None, "部門"] + per())
+    ws.append([None, "ペット計", 2.3e9, 3.9e6, .33, .34, 2.53e9, 4e6, .44, .45])
+    ws.append([None, "0001 A", 1.5e9, 1.9e6, .21, .22, 1.72e9, 2e6, .23, .24])
+    ws.append([None, "0002 B", .8e9, 2e6, .31, .32, .81e9, 2e6, .41, .42])
+    wc = wb.create_sheet("カテゴリー")
+    wc.append([None, "部門", "カテゴリ"] + [h for p in ("25/6", "26/6") for h in (f"{p}期\n全体売上", f"{p}期\n全体売れ数", f"{p}期\nPB比率\n(売上)", f"{p}期\nPB比率\n(売れ数)", f"{p}期\nPB SKU数")])
+    wc.append([None, "0001 A", "0001 X", 1.5e9, 1.9e6, .11, .12, 3, 1.72e9, 2e6, .13, .14, 5])
+    wc.append([None, "0002 B", "0002 Y", .8e9, 2e6, .15, .16, 6, .81e9, 2e6, .17, .18, 6])
+    b = io.BytesIO()
+    wb.save(b)
+    b.seek(0)
+    return b
+
+
+def test_company_department_and_category_figures_are_the_workbooks_own_values():
+    _, res = generate_report(_workbook_with_own_totals(), fmt="pdf")
+    dp = res.depts.set_index("dept")
+    assert abs(dp.loc["A", "share_cur"] - .23) < 1e-12 and abs(dp.loc["B", "share_prev"] - .31) < 1e-12   # not a weighted average of the rows
+    assert abs(res.kpi["share_cur"] - .44) < 1e-12 and abs(res.kpi["share_prev"] - .33) < 1e-12
+    ct = res.cats.set_index("cat")
+    assert abs(ct.loc["X", "share_cur"] - .13) < 1e-12 and ct.loc["Y", "sku_cur"] == 6
+    assert not any("加重平均" in m for sev, m in res.dq)                                                    # nothing fell back to computing a ratio
+
+
+def test_levels_without_their_own_figure_say_so():
+    _, res = generate_report(_mini_workbook(), fmt="pdf")
+    assert any("加重平均" in m for sev, m in res.dq)
 
 
 @pytest.mark.skipif(not SAMPLE or not os.path.exists(SAMPLE or ""), reason="PB_SAMPLE not set")
 def test_real_workbook_department_view():
     from pptx import Presentation
     _, res = generate_report(SAMPLE)
-    dp, b = res.depts, res.bridge
-    assert len(dp) >= 2 and abs(dp.pb_cur.sum() - b["pb_cur"]) < 1
-    assert abs(dp.rate_pt.sum() - b["rate_pt"]) < 1e-6 and abs(dp.mix_pt.sum() - b["mix_pt"]) < 1e-6
+    dp = res.depts
+    assert len(dp) >= 2 and abs(dp.sales.sum() - res.kpi["sales_cur"]) < 1
+    rep = res.recon[res.recon.period == res.periods_full[1]].set_index("scope")
+    assert all(abs(r.share_cur - rep.loc[r["dept"], "rep_ratio"]) < 1e-12 for _, r in dp.iterrows())   # the source's own department ratio
     data, _ = generate_report(SAMPLE, fmt="pptx")
     titles = [sl.shapes.title.text_frame.text for sl in Presentation(io.BytesIO(data)).slides]
     assert all(any(d in t for t in titles) for d in dp["dept"])      # one slide per department
@@ -135,7 +167,7 @@ def test_shorter_newest_period_is_shown_alongside_without_being_scaled_or_compar
     pdf, res = generate_report(_mini_workbook(third=True), fmt="pdf")
     assert res.period_latest == "27/6" and res.periods_full == ("25/6", "26/6")   # growth, bridge and directions stay on the comparable periods
     assert not hasattr(res, "annual_factor")                                       # nothing is scaled up to a full period
-    assert abs(res.depts.pb_latest.sum() - res.kpi["pb_latest"]) < 1               # departments add up to the total
+    assert abs(res.depts.sales_latest.sum() - res.kpi["sales_latest"]) < 1         # departments add up to the total
     assert pdf[:4] == b"%PDF" and generate_report(_mini_workbook(third=True), fmt="pdf_en")[0][:4] == b"%PDF"
     deck = Presentation(io.BytesIO(generate_report(_mini_workbook(third=True), fmt="pptx")[0]))
     assert any("3期" in sl.shapes.title.text_frame.text for sl in deck.slides)
@@ -160,5 +192,5 @@ def test_share_trend_tags_the_newest_period_against_the_last_full_year():
     from pbreport.analysis import T_DOWN, T_UP
     _, res = generate_report(_mini_workbook(third=True), fmt="pdf")
     tr = dict(zip(res.subs["name"], res.subs["trend"]))
-    assert tr["X / x1"] == T_UP and tr["Y / y1"] == T_DOWN      # +6 pt and -6 pt vs 26/6; both have PB sales above the minimum base
+    assert tr["X / x1"] == T_UP and tr["Y / y1"] == T_DOWN      # +4 pt and -6 pt vs 26/6; both are above the minimum sales and PB ratio
     assert tr["X / x2"] == ""                                      # no PB sales: not tagged

@@ -5,15 +5,13 @@ Upload the pet-category Excel workbook (the one with the 「サブカテ」 shee
 ## What it does
 1. Reads the workbook (`pbreport/loader.py`), validates the layout and gives a plain-language error if something is missing.
 2. Runs the analysis (`pbreport/analysis.py`):
-   * **Full scope + reconciliation:** categories that exist only in the category sheet (観賞魚 / 鳥 / 昆虫) are included, and every run checks computed sales and PB ratios against the source's own department totals (`方向性` sheet).
-   * **Growth:** total / PB / non-PB sales, units and price-mix growth; PB sales growth by category and sub-category (with a minimum-base rule so tiny bases don't produce meaningless percentages).
-   * **PB growth bridge:** change in PB sales = market effect + share effect (exact), and PB-ratio change = within-sub-category share change + sales-mix shift (exact).
-   * **SKU vs sales:** for every category and sub-category, PB SKU change vs PB sales change with a verdict, sales per SKU, and extra PB sales per added SKU.
-   * **Department view (部門 → カテゴリー → サブカテ):** a comparison of the five departments (PB share, growth, SKUs) with an exact split of the change in PB sales and PB ratio by department, then one page per department with its category scorecard (growth, rank inside the department, SKU vs sales verdict) and every sub-category with its direction. The company total is shown first, because the PB ratio of the whole business is an average of very different departments.
-   * **Direction rules** (拡大 Scale / 横展開 Replicate / シェア奪回 Recapture / 小規模テスト Test small / 要点検 Review / 防衛 Defend / 優先度低 Deprioritize / 経過観察 Monitor), and an illustrative upside. Data checks (reconciliation with the source totals) and detailed caveats are shown on the app page, not in the report; the report carries only a short 前提・注意事項 box.
+   * **The workbook's own numbers, no derived PB sales:** the workbook has no PB sales column, so PB sales (sales x PB ratio) are never calculated or shown. Sub-categories use the 「サブカテ」 sheet, categories the 「カテゴリー」 sheet, departments and the company total the 「方向性」 sheet, exactly as given (sales, units, PB ratio, PB SKU count). Only for a level the workbook has no figure for (e.g. a file without those sheets) is the PB ratio the sales-weighted average of the rows below, and the data checks say so. Categories that exist only in the category sheet (観賞魚 / 鳥 / 昆虫) are included, and every run reconciles the sub-category rows with the workbook's category, department and total figures.
+   * **PB ratio and SKUs:** PB ratio change (pt) by category and sub-category, and PB SKU change vs PB ratio change with a verdict (a minimum PB ratio / sales base so tiny bases don't produce meaningless verdicts).
+   * **Department view (部門 → カテゴリー → サブカテ):** a comparison of the five departments (sales, PB ratio, SKUs), then one page per department with its category table (sales rank inside the department, PB ratio change, SKU vs PB ratio verdict) and every sub-category with its direction.
+   * **Direction rules** (拡大 Scale / 横展開 Replicate / シェア奪回 Recapture / 小規模テスト Test small / 要点検 Review / 防衛 Defend / 優先度低 Deprioritize / 経過観察 Monitor), based on sales size and PB ratio level and change. Data checks and detailed caveats are shown on the app page, not in the report; the report carries only a short 前提・注意事項 box.
 3. Builds the report in the chosen format:
-   * **PDF** (`pbreport/pdf.py`): about 9 pages with an embedded Japanese font; one page per department lists every sub-category.
-   * **PowerPoint** (`pbreport/pptx_report.py`): 17-slide 16:9 deck with real slide titles, *native* charts and tables (editable in PowerPoint), speaker notes on every slide, Calibri / Yu Gothic fonts.
+   * **PDF** (`pbreport/pdf.py`): about 7 pages with an embedded Japanese font; one page per department lists every sub-category.
+   * **PowerPoint** (`pbreport/pptx_report.py`): 14-slide 16:9 deck with real slide titles, *native* charts and tables (editable in PowerPoint), speaker notes on every slide, Calibri / Yu Gothic fonts.
 
 The PDF (日本語), PowerPoint, app screen and error messages are in Japanese; an English PDF (`-f pdf_en`) is also available (category names and other Excel labels stay Japanese); amounts use 億円 / 万円. The analysis is deterministic: the same file always gives the same report. トライアル direction markers and the 過去資料 sheet are ignored.
 

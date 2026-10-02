@@ -3,10 +3,13 @@
 Expected layout (same as 開発方向性_コミュニケーション資料):
   * a sheet whose name contains 「サブカテ」: one row per sub-category, with 部門 / カテゴリ / サブカテ and, for each
     period, 全体売上 / 全体売れ数 / PB比率(売上) / PB比率(売れ数) / PB SKU数
-  * sheet 「カテゴリー」 (optional): same metrics at category level. Categories that have NO rows in the sub-category
-    sheet (e.g. 観賞魚, 鳥, 昆虫) are added as their own rows so that totals cover the whole business.
-  * sheet 「方向性」 (optional): department totals as reported by the source, plus a 「※Nヶ月分」 note. Used only to
-    reconcile our totals against the source, never as an input to the analysis.
+  * sheet 「カテゴリー」 (optional): same metrics at category level. These values are used as they are for category
+    figures. Categories that have NO rows in the sub-category sheet (e.g. 観賞魚, 鳥, 昆虫) are also added as their own
+    rows so that the sub-category list covers the whole business.
+  * sheet 「方向性」 (optional): department totals (sales, units, PB ratios) as reported by the source, plus a
+    「※Nヶ月分」 note. These values are used as they are for department and company figures.
+
+The workbook has no PB sales column; PB sales are never derived (sales x PB ratio) for display.
 
 Everything else (トライアル direction markers, 過去資料) is deliberately ignored.
 """
@@ -54,6 +57,7 @@ class WorkbookData:
     total_name: str | None = None          # key in `reported` of the grand-total row (ペット計)
     category_only: list[str] = field(default_factory=list)   # categories added from the カテゴリー sheet
     warnings: list[str] = field(default_factory=list)
+    cat_reported: dict = field(default_factory=dict)   # {(dept, cat): {period: {sales, units, pb_ratio_sales, pb_ratio_units, pb_skus}}}
 
 
 def _find_sheet(xl: pd.ExcelFile, keyword: str):
@@ -128,6 +132,7 @@ def load_workbook_data(xlsx) -> WorkbookData:
 
     warnings: list = []
     category_only: list = []
+    cat_reported: dict = {}
 
     # --- category sheet: add categories that have no sub-category rows ------------------------------
     cat_name = _find_sheet(xl, "カテゴリー")
@@ -145,6 +150,9 @@ def load_workbook_data(xlsx) -> WorkbookData:
                 for k in _METRICS.values():
                     cc[f"{k}_{p}"] = _num(rows.iloc[:, cfound[(p, k)]])
             cc = cc[(cc["cat"] != "") & (cc["cat"].str.lower() != "nan")]
+            for _, row in cc.iterrows():
+                cat_reported[(row["dept"], row["cat"])] = {
+                    p: {k: float(row[f"{k}_{p}"]) for k in _METRICS.values()} for p in periods}
             have = set(zip(out["dept"], out["cat"]))
             extra = cc[[(d, k) not in have for d, k in zip(cc["dept"], cc["cat"])]].copy()
             if len(extra):
@@ -180,4 +188,4 @@ def load_workbook_data(xlsx) -> WorkbookData:
                 if "計" in nm and total_name is None:
                     total_name = nm
 
-    return WorkbookData(out, periods, partial_months, reported, total_name, category_only, warnings)
+    return WorkbookData(out, periods, partial_months, reported, total_name, category_only, warnings, cat_reported)
