@@ -21,7 +21,7 @@ def build(file_bytes: bytes, name: str, fmt: str):
     if res.lang != "ja":   # the notes shown on this page stay Japanese even when the report is English
         res = analyze(load_workbook_data(io.BytesIO(file_bytes)), Thresholds())
     recon_ok = bool(len(res.recon) and res.recon.ok.all())
-    return blob, res.kpi, res.caveats, res.dq, recon_ok, res.bridge
+    return blob, res.caveats, res.dq, recon_ok
 
 
 up = st.file_uploader("Excelファイル (.xlsx)", type=["xlsx"], accept_multiple_files=False)
@@ -33,7 +33,7 @@ fmt = next(k for k, v in FORMAT_LABELS.items() if v == fmt_label)
 if up is not None:
     try:
         with st.spinner(f"分析して{FORMAT_LABELS[fmt]}レポートを作成しています…"):
-            blob, k, caveats, dq, recon_ok, bridge = build(up.getvalue(), up.name, fmt)
+            blob, caveats, dq, recon_ok = build(up.getvalue(), up.name, fmt)
     except WorkbookError as e:
         st.error(f"このファイルは処理できませんでした: {e}")
         st.stop()
@@ -43,11 +43,6 @@ if up is not None:
         st.stop()
 
     st.success("レポートが完成しました。")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("PB売上", f"{k['pb_cur'] / 1e8:,.2f}億円", f"{k['pb_yoy'] * 100:+.1f}%")
-    c2.metric("PB比率", f"{k['share_cur'] * 100:.2f}%", f"{(k['share_cur'] - k['share_prev']) * 100:+.2f}pt")
-    per = k.get("per_sku_chg")
-    c3.metric("SKU当たりPB売上", f"{k['per_sku_cur'] / 1e4:,.0f}万円", f"{per * 100:+.0f}%" if per == per else None)
 
     label, mime, ext = FORMATS[fmt]
     base = up.name.rsplit(".", 1)[0]
