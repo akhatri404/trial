@@ -106,6 +106,25 @@ def test_english_pdf_has_no_japanese_report_text():
     assert not bad, bad
 
 
+def test_direction_rules_appendix_in_both_formats():
+    import re
+    from pptx import Presentation
+    from pypdf import PdfReader
+    from pbreport.analysis import DEFEND, DEPRIORITIZE, MONITOR, RECAPTURE, REPLICATE, REVIEW, SCALE, TEST, direction_rules
+    pdf, res = generate_report(_mini_workbook(), fmt="pdf")
+    rules, note = direction_rules(res)
+    # same order as the checks in _classify_all, one row per direction
+    assert [d for d, _ in rules] == [RECAPTURE, REVIEW, SCALE, DEFEND, REPLICATE, TEST, DEPRIORITIZE, MONITOR]
+    assert "2億円" in rules[0][1] and note
+    assert "方向性の判定ルール" in PdfReader(io.BytesIO(pdf)).pages[-1].extract_text()
+    deck = Presentation(io.BytesIO(generate_report(_mini_workbook(), fmt="pptx")[0]))
+    assert "方向性の判定ルール" in deck.slides[-1].shapes.title.text_frame.text
+    en, res_en = generate_report(_mini_workbook(), fmt="pdf_en")
+    rules_en, note_en = direction_rules(res_en)
+    cjk = re.compile(r"[぀-ヿ一-鿿]")
+    assert not [c for _, c in rules_en if cjk.search(c.replace("期", ""))] and not cjk.search(note_en.replace("期", ""))
+
+
 def test_department_view_adds_up_to_the_company_total():
     _, res = generate_report(_mini_workbook(), fmt="pdf")
     dp, k = res.depts, res.kpi

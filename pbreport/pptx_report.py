@@ -20,7 +20,7 @@ from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
 from .analysis import (DEFEND, DEPRIORITIZE, MONITOR, RECAPTURE, REPLICATE, REVIEW, SCALE, TEST, V_SMALL, Result, _jpy,
-                       ORDER, T_DOWN, T_FLAT, T_UP, key_notes)
+                       ORDER, T_DOWN, T_FLAT, T_UP, direction_rules, key_notes)
 from .pdf import DIR_BLURB
 
 # palette: deep teal dominant, warm amber as the single sharp accent
@@ -462,6 +462,15 @@ def build_pptx(res: Result, source_name: str = "") -> bytes:
     notes_ = key_notes(res)
     _bullets(s, MX, 1.6, SW - 2 * MX, 5.4, notes_, size=18, gap=16, name="Notes")
     _notes(s, "\n".join(notes_))
+
+    # ---------------------------------------------------------------- appendix: direction rules
+    s = prs.slides.add_slide(L_TONLY)
+    _title(s, "付録: 方向性の判定ルール")
+    rules, rule_note = direction_rules(res)
+    _text(s, MX, 1.35, SW - 2 * MX, 0.85, rule_note, 11, MUTED, name="Rule note")
+    rows = [["順", "方向性", "条件"]] + [[str(i), dn, cond] for i, (dn, cond) in enumerate(rules, start=1)]
+    _table(s, rows, [0.6, 1.8, SW - 2 * MX - 2.4], MX, 2.3, row_h=0.5, size=11, name="Direction rules table")
+    _notes(s, rule_note + "\n" + "\n".join(f"{i}. {dn}: {cond}" for i, (dn, cond) in enumerate(rules, start=1)))
 
     buf = io.BytesIO()
     prs.save(buf)

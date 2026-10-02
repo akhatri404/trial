@@ -23,7 +23,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle)
 
 from .analysis import (DEFEND, DEPRIORITIZE, MONITOR, ORDER, RECAPTURE, REPLICATE, REVIEW, SCALE, TEST, V_SMALL, Result,
-                       T_DOWN, T_FLAT, T_UP, key_notes, money, tr)
+                       T_DOWN, T_FLAT, T_UP, direction_rules, key_notes, money, tr)
 
 NAVY = colors.HexColor("#1F3864")
 GREY = colors.HexColor("#595959")
@@ -316,7 +316,7 @@ def build_pdf(res: Result, source_name: str = "") -> bytes:
                      pc(k["sku_cur"], k["sku_latest"])])
         S.append(_table(rows, w3, st))
         NOTE(LATNOTE)
-    H2(T("方向性の見方(次ページ以降の部門別分析で使用)", "How to read the directions (used in the department pages that follow)"))
+    H2(T("方向性の見方(次ページ以降の部門別分析で使用。判定条件は付録)", "How to read the directions (used in the department pages that follow; exact rules in the appendix)"))
     for dname in ORDER:
         S.append(Paragraph(f'<font color="{DIR_COLOR[dname]}">{escape(D(dname))}</font>: {escape(BLURB[dname])}', st["small"]))
 
@@ -386,6 +386,17 @@ def build_pdf(res: Result, source_name: str = "") -> bytes:
 
     for line in key_notes(res):
         BULLET(line)
+
+    # ---- appendix: how the directions are decided ----
+    S.append(PageBreak())
+    H1(T("付録. 方向性の判定ルール", "Appendix. How the directions are decided"))
+    rules, rule_note = direction_rules(res)
+    BODY(rule_note)
+    rows = [[T("順", "#"), T("方向性", "Direction"), T("条件", "Condition")]]
+    for i, (dname, cond) in enumerate(rules, start=1):
+        rows.append([str(i), Paragraph(f'<font color="{DIR_COLOR[dname]}">{escape(D(dname))}</font>', st["cell"]), cond])
+    S.append(Spacer(1, 4))
+    S.append(_table(rows, [FW * .06, FW * .16, FW * .78], st))
 
     doc.build(S, onFirstPage=footer, onLaterPages=footer)
     return buf.getvalue()

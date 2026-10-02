@@ -177,6 +177,53 @@ def _classify_all(d: pd.DataFrame, t: Thresholds) -> pd.Series:
     return d.apply(one, axis=1)
 
 
+def direction_rules(res: "Result") -> tuple[list, str]:
+    """The rules `_classify_all` applies, in the same order, worded from the live thresholds. For the appendix."""
+    t, lang = res.thresholds, res.lang
+    prev, cur = res.periods_full
+    ja = lang == "ja"
+    yen = (lambda x: f"{x / 1e8:g}億円") if ja else _usd
+    pct, spct = (lambda x: f"{x:.0%}"), (lambda x: f"{x:+.0%}")
+    big, ws = yen(t.min_headroom), pct(t.white_space_max_share)
+    if ja:
+        rows = [
+            (RECAPTURE, f"PB比率が{t.recapture_drop_pt:g}pt以上低下、かつ{prev}期売上{big}以上"),
+            (REVIEW, f"PB比率が{t.review_drop_pt:g}pt以上低下、かつ{prev}期売上{yen(t.review_min_sales)}以上"),
+            (SCALE, f"PB比率が{t.scale_share_gain_pt:g}pt以上上昇、{cur}期売上{big}以上、PB比率{pct(t.scale_max_share)}未満、"
+                    f"市場前年比{spct(t.scale_min_market_yoy)}超"),
+            (DEFEND, f"PB比率{pct(t.defend_min_share)}以上、かつ{cur}期売上{big}以上"),
+            (REPLICATE, f"PB比率{ws}以下、{cur}期売上{big}以上、市場前年比{spct(t.test_min_market_yoy)}以上、"
+                        f"かつ同じカテゴリー内に「{SCALE}」のサブカテがある"),
+            (TEST, f"「{REPLICATE}」と同じ条件で、同じカテゴリー内に「{SCALE}」のサブカテがない"),
+            (DEPRIORITIZE, f"PB比率{ws}以下で、(売上{yen(t.deprioritize_max_sales)}未満・市場前年比{spct(t.deprioritize_max_growth)}以下・"
+                           f"最新期のPB比率も{ws}以下)または市場前年比{spct(t.deprioritize_market_yoy)}以下"),
+            (MONITOR, "上記のいずれにも当てはまらない"),
+        ]
+        note = (f"上から順に判定し、最初に当てはまった方向性を付けます。PB比率は元資料の「PB比率(売上)」、売上は「全体売上」({prev}期・{cur}期)、"
+                f"PB比率の増減は{prev}期→{cur}期の差(pt)、市場前年比は{cur}期売上÷{prev}期売上−1です。"
+                "元資料の「トライアル」「トーエー」欄の記号は使っていません。閾値は判断基準として設定した値で、データから導いたものではありません。")
+    else:
+        rows = [
+            (RECAPTURE, f"PB ratio down {t.recapture_drop_pt:g} pt or more, and {prev}期 sales of {big} or more"),
+            (REVIEW, f"PB ratio down {t.review_drop_pt:g} pt or more, and {prev}期 sales of {yen(t.review_min_sales)} or more"),
+            (SCALE, f"PB ratio up {t.scale_share_gain_pt:g} pt or more, {cur}期 sales of {big} or more, PB ratio below "
+                    f"{pct(t.scale_max_share)}, market YoY above {spct(t.scale_min_market_yoy)}"),
+            (DEFEND, f"PB ratio of {pct(t.defend_min_share)} or more, and {cur}期 sales of {big} or more"),
+            (REPLICATE, f"PB ratio at or below {ws}, {cur}期 sales of {big} or more, market YoY of {spct(t.test_min_market_yoy)} or more, "
+                        f"and a sibling sub-category in the same category is {tr(SCALE, 'en')}"),
+            (TEST, f"Same as {tr(REPLICATE, 'en')}, but no sibling in the same category is {tr(SCALE, 'en')}"),
+            (DEPRIORITIZE, f"PB ratio at or below {ws}, and either (sales under {yen(t.deprioritize_max_sales)}, market YoY at or below "
+                           f"{spct(t.deprioritize_max_growth)} and newest-period PB ratio also at or below {ws}) or market YoY at or below "
+                           f"{spct(t.deprioritize_market_yoy)}"),
+            (MONITOR, "None of the above"),
+        ]
+        note = (f"Rules are checked top to bottom; the first one that matches is the direction. PB ratio is the workbook's PB ratio (sales) and "
+                f"sales its total sales ({prev}期 and {cur}期); the PB ratio change is {prev}期 → {cur}期 in pt, and market YoY is "
+                f"{cur}期 sales / {prev}期 sales - 1. The workbook's own direction marks are not used. The thresholds are judgement "
+                "settings, not derived from the data.")
+    return rows, note
+
+
 # ------------------------------------------------------------------------------------------------------------
 def _wavg(ratio, weight) -> float:
     """Sales-weighted average of a ratio. Fallback only, for a level the workbook gives no figure for."""
